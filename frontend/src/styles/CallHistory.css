@@ -1,0 +1,162 @@
+.call-history-container {
+  padding: 20px;
+}
+
+.call-history-header {
+  margin-bottom: 30px;
+}
+
+.call-history-header h1 {
+  margin-bottom: 10px;
+  color: #333;
+}
+
+.schedule-call-section {
+  background-color: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  padding: 20px;
+  margin-bottom: 30px;
+}
+
+.schedule-call-section h2 {
+  margin-top: 0;
+  margin-bottom: 20px;
+  font-size: 18px;
+  color: #333;
+}
+
+.schedule-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 20px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.form-group label {
+  margin-bottom: 8px;
+  font-weight: 500;
+  color: #555;
+}
+
+.form-group input,
+.form-group select {
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.schedule-button {
+  background-color: #4285f4;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 10px 15px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.3s;
+  max-width: 200px;
+}
+
+.schedule-button:hover {
+  background-color: #3367d6;
+}
+
+.schedule-button:disabled {
+  background-color: #a4c2f4;
+  cursor: not-allowed;
+}
+
+.error-message {
+  color: #d93025;
+  font-size: 14px;
+  margin-top: 5px;
+}
+
+.success-message {
+  background-color: #e6f7e6;
+  color: #28a745;
+  padding: 10px;
+  border-radius: 4px;
+  margin-bottom: 20px;
+}
+
+.call-history-list {
+  background-color: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  padding: 20px;
+}
+
+.call-history-list h2 {
+  margin-top: 0;
+  margin-bottom: 20px;
+  font-size: 18px;
+  color: #333;
+}
+
+.calls-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.calls-table th {
+  text-align: left;
+  padding: 10px;
+  border-bottom: 2px solid #eee;
+  font-weight: 600;
+  color: #555;
+}
+
+.calls-table td {
+  padding: 12px 10px;
+  border-bottom: 1px solid #eee;
+  vertical-align: top;
+}
+
+.calls-table tr:hover {
+  background-color: #f9f9f9;
+}
+
+.call-type {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.call-type.market-open {
+  background-color: #e8f5e9;
+  color: #388e3c;
+}
+
+.call-type.market-close {
+  background-color: #fce4ec;
+  color: #d81b60;
+}
+
+.call-type.custom {
+  background-color: #e3f2fd;
+  color: #1976d2;
+}
+
+.loading-state {
+  text-align: center;
+  padding: 40px;
+  color: #666;
+}
+
+.error-state {
+  background-color: #f8d7da;
+  color: #721c24;
+  padding: 15px;
+  border-radius: 4px;
+  margin-bottom: 20px;
+} 

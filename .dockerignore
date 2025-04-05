@@ -1,0 +1,35 @@
+# Git
+.git
+.gitignore
+
+# Node.js (for frontend)
+frontend/node_modules
+frontend/npm-debug.log
+frontend/build
+
+# Python (for backend)
+backend/__pycache__/
+backend/*.py[cod]
+backend/*$py.class
+backend/.env
+backend/venv/
+backend/.pytest_cache/
+
+# Docker
+.dockerignore
+**/Dockerfile
+docker-compose.yml
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDEs and editors
+.idea/
+.vscode/
+*.swp
+*.swo 
+venv
