@@ -126,16 +126,115 @@
   background-color: #3367d6;
 }
 
-.loading-state {
+.loading-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 300px;
   text-align: center;
-  padding: 40px;
-  color: #666;
 }
 
-.error-state {
-  background-color: #f8d7da;
-  color: #721c24;
-  padding: 15px;
-  border-radius: 4px;
+.loading {
+  display: inline-block;
+  position: relative;
+  width: 80px;
+  height: 80px;
   margin-bottom: 20px;
+}
+
+.loading div {
+  display: inline-block;
+  position: absolute;
+  left: 8px;
+  width: 16px;
+  background: #4285f4;
+  animation: loading 1.2s cubic-bezier(0, 0.5, 0.5, 1) infinite;
+}
+
+.loading div:nth-child(1) {
+  left: 8px;
+  animation-delay: -0.24s;
+}
+
+.loading div:nth-child(2) {
+  left: 32px;
+  animation-delay: -0.12s;
+}
+
+.loading div:nth-child(3) {
+  left: 56px;
+  animation-delay: 0;
+}
+
+@keyframes loading {
+  0% {
+    top: 8px;
+    height: 64px;
+  }
+  50%, 100% {
+    top: 24px;
+    height: 32px;
+  }
+}
+
+.error-container {
+  max-width: 600px;
+  margin: 50px auto;
+  text-align: center;
+  padding: 30px;
+  background-color: #f8f9fa;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.error-message {
+  color: #dc3545;
+  font-size: 18px;
+  margin-bottom: 20px;
+  padding: 15px;
+  background-color: #f8d7da;
+  border-radius: 4px;
+}
+
+.retry-button {
+  background-color: #28a745;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 8px 16px;
+  font-size: 16px;
+  cursor: pointer;
+  transition: background-color 0.3s;
+}
+
+.retry-button:hover {
+  background-color: #218838;
+}
+
+.empty-portfolio {
+  text-align: center;
+  padding: 30px;
+  background-color: #f8f9fa;
+  border-radius: 8px;
+  margin: 20px 0;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+
+.empty-portfolio p {
+  margin-bottom: 15px;
+  font-size: 16px;
+  color: #555;
+}
+
+.empty-portfolio p:first-child {
+  font-size: 18px;
+  font-weight: 500;
+  color: #333;
+}
+
+.empty-portfolio .action-button {
+  margin-top: 15px;
+  padding: 10px 20px;
+  font-size: 16px;
 } 

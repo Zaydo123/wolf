@@ -159,4 +159,274 @@
   padding: 15px;
   border-radius: 4px;
   margin-bottom: 20px;
+}
+
+.scheduled-calls-section {
+  background-color: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  padding: 20px;
+  margin-bottom: 30px;
+}
+
+.scheduled-calls-section h2 {
+  margin-top: 0;
+  margin-bottom: 20px;
+  font-size: 18px;
+  color: #333;
+}
+
+.scheduled-calls-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 15px;
+}
+
+.scheduled-call-card {
+  background-color: #f8f9fa;
+  border-radius: 6px;
+  padding: 15px;
+  width: calc(33.333% - 10px);
+  min-width: 200px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.scheduled-call-card .call-type {
+  font-weight: 600;
+  color: #4285f4;
+}
+
+.scheduled-call-card .call-time {
+  font-size: 1.1rem;
+}
+
+.scheduled-call-card .call-status {
+  display: inline-block;
+  background-color: #e6f7e6;
+  color: #28a745;
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  align-self: flex-start;
+}
+
+/* Call Cards Styles */
+.call-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.call-card {
+  background-color: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.call-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.call-date {
+  font-size: 0.9rem;
+  color: #666;
+}
+
+.call-badge {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.call-badge.completed {
+  background-color: #e6f7e6;
+  color: #28a745;
+}
+
+.call-badge.failed {
+  background-color: #f8d7da;
+  color: #721c24;
+}
+
+.call-badge.initiated {
+  background-color: #e3f2fd;
+  color: #1976d2;
+}
+
+.call-details {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.call-info {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.call-info .label {
+  font-weight: 500;
+  color: #555;
+}
+
+.call-info .value {
+  color: #333;
+}
+
+.call-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.call-summary .label {
+  font-weight: 500;
+  color: #555;
+}
+
+.call-summary p {
+  margin: 0;
+  color: #333;
+  line-height: 1.5;
+}
+
+.call-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.call-actions .label {
+  font-weight: 500;
+  color: #555;
+}
+
+.call-actions ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.call-actions li {
+  padding: 5px 0;
+  color: #333;
+}
+
+.call-controls {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 15px;
+}
+
+.play-button {
+  background-color: #4285f4;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 8px 15px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: background-color 0.3s;
+}
+
+.play-button:hover {
+  background-color: #3367d6;
+}
+
+.play-button i {
+  font-size: 1rem;
+}
+
+.no-calls {
+  text-align: center;
+  color: #666;
+  padding: 40px;
+  background-color: #f8f9fa;
+  border-radius: 8px;
+}
+
+.call-transcript {
+  margin-top: 1rem;
+  border-top: 1px solid #eee;
+  padding-top: 1rem;
+}
+
+.transcript-content {
+  max-height: 300px;
+  overflow-y: auto;
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  background: #f8f9fa;
+  border-radius: 4px;
+}
+
+.transcript-entry {
+  margin-bottom: 0.75rem;
+  padding: 0.5rem;
+  border-radius: 4px;
+}
+
+.transcript-entry.broker {
+  background: #e3f2fd;
+  margin-left: 1rem;
+}
+
+.transcript-entry.user {
+  background: #f5f5f5;
+  margin-right: 1rem;
+}
+
+.transcript-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 0.25rem;
+  font-size: 0.85rem;
+  color: #666;
+}
+
+.transcript-header .speaker {
+  font-weight: 600;
+}
+
+.transcript-header .timestamp {
+  color: #999;
+}
+
+.transcript-entry .message {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Scrollbar styling for transcript */
+.transcript-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.transcript-content::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+.transcript-content::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 3px;
+}
+
+.transcript-content::-webkit-scrollbar-thumb:hover {
+  background: #555;
 } 

@@ -109,9 +109,21 @@ const Dashboard = ({ socket }) => {
     const fetchDashboardData = async () => {
       try {
         setLoading(true);
+        setError(null);
         
-        // Fetch portfolio data
-        const portfolioRes = await axios.get(`${API_URL}/api/trades/portfolio/${user.id}`);
+        // Fetch portfolio data with retry
+        let portfolioRes;
+        let retries = 3;
+        while (retries > 0) {
+          try {
+            portfolioRes = await axios.get(`${API_URL}/api/trades/portfolio/${user.id}`);
+            break;
+          } catch (err) {
+            retries--;
+            if (retries === 0) throw err;
+            await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second before retry
+          }
+        }
         setPortfolio(portfolioRes.data);
         
         // Fetch market summary
@@ -125,7 +137,11 @@ const Dashboard = ({ socket }) => {
         setLoading(false);
       } catch (err) {
         console.error('Error fetching dashboard data:', err);
-        setError('Failed to load dashboard data. Please try again later.');
+        if (err.response?.status === 404) {
+          setError('User not found. Please try logging out and back in.');
+        } else {
+          setError('Failed to load dashboard data. Please try again later.');
+        }
         setLoading(false);
       }
     };
@@ -158,11 +174,40 @@ const Dashboard = ({ socket }) => {
   
   const handleInitiateCall = async () => {
     try {
-      await axios.post(`${API_URL}/api/calls/initiate/${user.id}`);
+      // Show status message to user
+      setLoading(true);
+      
+      if (!user || !user.id) {
+        alert("User information not available. Please try logging in again.");
+        setLoading(false);
+        return;
+      }
+      
+      // Initiate the call - Reverted to include user.id in path
+      const response = await axios.post(`${API_URL}/api/calls/initiate/${user.id}`);
+      
+      // Show success message
       alert('Call initiated! You will receive a phone call shortly.');
+      
     } catch (err) {
       console.error('Error initiating call:', err);
-      alert('Failed to initiate call. Please try again later.');
+      
+      // Provide specific error messages based on the HTTP error
+      if (err.response) {
+        if (err.response.status === 404) {
+          alert('User not found. Please make sure you are registered correctly.');
+        } else if (err.response.status === 400) {
+          alert(`Error: ${err.response.data.detail}`);
+        } else if (err.response.status === 500) {
+          alert(`Server error: ${err.response.data.detail}`);
+        } else {
+          alert('Failed to initiate call. Please try again later.');
+        }
+      } else {
+        alert('Failed to initiate call. Please try again later.');
+      }
+    } finally {
+      setLoading(false);
     }
   };
   

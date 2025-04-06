@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend } from 'recharts';
+import { fetchData } from '../utils/apiUtils';
 import '../styles/Portfolio.css';
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8', '#FF6666'];
@@ -15,31 +16,68 @@ const Portfolio = ({ socket }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  useEffect(() => {
-    const fetchPortfolio = async () => {
-      try {
-        // In a real app, this would be a call to an API
-        // For demo, we'll set some mock data
-        const mockData = {
-          portfolioValue: 24650.75,
-          cashBalance: 5350.25,
-          positions: [
-            { ticker: 'AAPL', quantity: 10, currentValue: 3750.50, averagePrice: 130.25, profit: 450.50 },
-            { ticker: 'MSFT', quantity: 15, currentValue: 4875.25, averagePrice: 290.50, profit: 510.25 },
-            { ticker: 'GOOGL', quantity: 5, currentValue: 6250.50, averagePrice: 1150.25, profit: 720.50 },
-            { ticker: 'AMZN', quantity: 8, currentValue: 2850.25, averagePrice: 330.50, profit: -210.75 },
-            { ticker: 'TSLA', quantity: 12, currentValue: 1575.00, averagePrice: 145.25, profit: -168.00 }
-          ]
-        };
-        
-        setPortfolio(mockData);
-        setLoading(false);
-      } catch (err) {
-        setError('Failed to load portfolio data');
-        setLoading(false);
+  // Define fetchPortfolio outside useEffect so we can call it from retry button 
+  const fetchPortfolio = async () => {
+    if (!user?.id) {
+      setError('No user ID available');
+      setLoading(false);
+      return;
+    }
+    
+    try {
+      console.log(`Fetching portfolio for user ID: ${user.id}`);
+      
+      // Use the fetchData utility for better error handling and retries
+      const data = await fetchData(`/api/trades/portfolio/${user.id}`);
+      
+      // Transform the API data to match our component's expected format
+      // First, ensure the data has the expected structure
+      if (!data || typeof data !== 'object') {
+        console.error('Invalid portfolio data received:', data);
+        throw new Error('Invalid data format received from server');
       }
-    };
+      
+      // Check if portfolio_value is present and is a number
+      const portfolioValue = typeof data.portfolio_value === 'number' ? data.portfolio_value : 0;
+      const cashBalance = typeof data.cash_balance === 'number' ? data.cash_balance : 0;
+      
+      // Make sure positions is an array
+      const positions = Array.isArray(data.positions) ? data.positions : [];
+      
+      const portfolioData = {
+        portfolioValue: portfolioValue,
+        cashBalance: cashBalance,
+        positions: positions.map(position => {
+          // Ensure required fields exist with defaults if missing
+          const ticker = position.ticker || 'UNKNOWN';
+          const quantity = typeof position.quantity === 'number' ? position.quantity : 0;
+          const value = typeof position.value === 'number' ? position.value : 0;
+          const avgPrice = typeof position.avg_price === 'number' ? position.avg_price : 0;
+          const currentPrice = typeof position.current_price === 'number' ? position.current_price : avgPrice;
+          
+          return {
+            ticker: ticker,
+            quantity: quantity,
+            currentValue: value,
+            averagePrice: avgPrice,
+            profit: (currentPrice - avgPrice) * quantity
+          };
+        })
+      };
+      
+      console.log('Portfolio data loaded successfully:', portfolioData);
+      setPortfolio(portfolioData);
+      setError(''); // Clear any previous errors
+      setLoading(false);
+    } catch (err) {
+      console.error('Error fetching portfolio:', err);
+      setError(`Failed to load portfolio data: ${err.message}`);
+      setLoading(false);
+    }
+  };
 
+  useEffect(() => {
+    // Load portfolio data when component mounts
     fetchPortfolio();
 
     // Handle WebSocket updates
@@ -89,7 +127,21 @@ const Portfolio = ({ socket }) => {
   }
 
   if (error) {
-    return <div className="error-message">{error}</div>;
+    return (
+      <div className="error-container">
+        <div className="error-message">{error}</div>
+        <button 
+          className="retry-button" 
+          onClick={() => {
+            setLoading(true);
+            setError('');
+            fetchPortfolio();
+          }}
+        >
+          Retry
+        </button>
+      </div>
+    );
   }
 
   return (
@@ -160,31 +212,42 @@ const Portfolio = ({ socket }) => {
       
       <div className="positions-table">
         <h3>Your Positions</h3>
-        <table>
-          <thead>
-            <tr>
-              <th>Symbol</th>
-              <th>Quantity</th>
-              <th>Avg. Price</th>
-              <th>Current Value</th>
-              <th>Profit/Loss</th>
-            </tr>
-          </thead>
-          <tbody>
-            {portfolio.positions.map((position) => (
-              <tr key={position.ticker}>
-                <td>{position.ticker}</td>
-                <td>{position.quantity}</td>
-                <td>${position.averagePrice.toFixed(2)}</td>
-                <td>${position.currentValue.toFixed(2)}</td>
-                <td className={position.profit >= 0 ? 'profit' : 'loss'}>
-                  ${Math.abs(position.profit).toFixed(2)} 
-                  {position.profit >= 0 ? '▲' : '▼'}
-                </td>
+        
+        {portfolio.positions.length > 0 ? (
+          <table>
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Quantity</th>
+                <th>Avg. Price</th>
+                <th>Current Value</th>
+                <th>Profit/Loss</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {portfolio.positions.map((position) => (
+                <tr key={position.ticker}>
+                  <td>{position.ticker}</td>
+                  <td>{position.quantity}</td>
+                  <td>${position.averagePrice.toFixed(2)}</td>
+                  <td>${position.currentValue.toFixed(2)}</td>
+                  <td className={position.profit >= 0 ? 'profit' : 'loss'}>
+                    ${Math.abs(position.profit).toFixed(2)} 
+                    {position.profit >= 0 ? '▲' : '▼'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div className="empty-portfolio">
+            <p>You don't have any positions yet.</p>
+            <p>You have ${portfolio.cashBalance.toFixed(2)} available to invest.</p>
+            <button className="action-button" onClick={() => window.location.href = '/dashboard'}>
+              Start Trading
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

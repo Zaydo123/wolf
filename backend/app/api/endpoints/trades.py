@@ -9,13 +9,15 @@ from app.core.imports import APP_DIR, BACKEND_DIR
 
 # Import services
 from app.services.trading_service import TradingService
+from app.services.news_service import NewsService
 from app.db.supabase import get_supabase_client
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/trades", tags=["trades"])
 
-# Initialize trading service
+# Initialize services
 trading_service = TradingService()
+news_service = NewsService()
 
 # Simple function to access the WebSocket manager
 def get_manager():
@@ -98,17 +100,24 @@ async def get_portfolio(user_id: str):
         user_id: User ID
     """
     try:
-        # Use the trading service to get the user summary
-        user_summary = await trading_service.get_user_summary(user_id)
-        
-        return {
-            "portfolio_value": user_summary.get("portfolio_value", 0),
-            "cash_balance": user_summary.get("cash_balance", 0),
-            "positions": user_summary.get("positions", [])
-        }
+        # Use the trading service to get the user portfolio directly
+        logger.info(f"Fetching portfolio via endpoint for user: {user_id}")
+        portfolio = await trading_service.get_user_portfolio(user_id)
+        logger.info(f"Successfully fetched portfolio via endpoint for user: {user_id}")
+        return portfolio
+    except ValueError as ve:
+        # Handle specific ValueErrors from the service (like user not found)
+        logger.error(f"Value error getting portfolio for {user_id}: {ve}")
+        # If the error indicates user not found, return 404
+        if "not found" in str(ve).lower():
+            raise HTTPException(status_code=404, detail=str(ve))
+        else:
+            # Other ValueErrors (like DB connection issues) should be 500
+            raise HTTPException(status_code=500, detail=f"Failed to retrieve portfolio: {str(ve)}")
     except Exception as e:
-        logger.error(f"Error getting portfolio: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        # Catch any other unexpected errors
+        logger.error(f"Unexpected error getting portfolio for {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"An unexpected server error occurred: {str(e)}")
 
 @router.get("/market/summary")
 async def get_market_summary():
@@ -122,6 +131,23 @@ async def get_market_summary():
         return market_summary
     except Exception as e:
         logger.error(f"Error getting market summary: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/market/news")
+async def get_market_news(max_items: int = 10):
+    """
+    Get the latest financial news from RSS feeds.
+    
+    Parameters:
+        max_items: Maximum number of news items to return
+    """
+    try:
+        # Get news directly from the news service
+        news_items = await news_service.get_financial_news(max_items=max_items)
+        
+        return {"news": news_items}
+    except Exception as e:
+        logger.error(f"Error getting market news: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/quote/{ticker}")

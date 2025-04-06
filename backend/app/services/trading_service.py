@@ -3,24 +3,81 @@ import asyncio
 import datetime
 import httpx
 import os
+import time
+from functools import lru_cache
 
 # Try both import approaches
 try:
     # Absolute imports (when running from backend/)
     from app.db.supabase import get_supabase_client
+    from app.services.news_service import NewsService
 except ImportError:
     # Relative imports (when running from app/)
     from ..db.supabase import get_supabase_client
+    from ..services.news_service import NewsService
 
 logger = logging.getLogger(__name__)
 
+# Alpha Vantage settings
+ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY")
+if not ALPHA_VANTAGE_API_KEY:
+    raise ValueError("ALPHA_VANTAGE_API_KEY environment variable is not set")
+ALPHA_VANTAGE_BASE_URL = "https://www.alphavantage.co/query"
+
+# Simple in-memory cache for stock and index data
+CACHE = {}
+CACHE_EXPIRY = {}  # Store expiry timestamps for cache entries
+CACHE_DURATION = 60 * 30  # Cache data for 30 minutes (in seconds)
+
+# Rate limiting settings
+LAST_REQUEST_TIME = time.time()
+MIN_REQUEST_INTERVAL = 1.0  # 1 second between requests (Alpha Vantage has better rate limits)
+
 class TradingService:
     def __init__(self):
-        self.supabase = get_supabase_client()
+        self.supabase = get_supabase_client(use_service_role=True)
+        self.session = httpx.AsyncClient(timeout=30.0)
+        self.stock_cache = {}
+        self.cache_timeout = 300  # 5 minutes
+        self.news_service = NewsService()  # Initialize the news service
+    
+    async def _rate_limit_request(self):
+        """
+        Implement rate limiting to avoid hitting Alpha Vantage's rate limits.
+        """
+        global LAST_REQUEST_TIME
+        
+        current_time = time.time()
+        time_since_last_request = current_time - LAST_REQUEST_TIME
+        
+        if time_since_last_request < MIN_REQUEST_INTERVAL:
+            wait_time = MIN_REQUEST_INTERVAL - time_since_last_request
+            logger.debug(f"Rate limiting: waiting {wait_time:.2f} seconds")
+            await asyncio.sleep(wait_time)
+        
+        LAST_REQUEST_TIME = time.time()
+    
+    def _get_cached_data(self, key):
+        """Get data from cache if it exists and hasn't expired"""
+        if key in CACHE and key in CACHE_EXPIRY:
+            if time.time() < CACHE_EXPIRY[key]:
+                logger.info(f"Using cached data for {key}")
+                return CACHE[key]
+            else:
+                # Clean up expired cache entry
+                del CACHE[key]
+                del CACHE_EXPIRY[key]
+        return None
+        
+    def _cache_data(self, key, data):
+        """Store data in cache with expiry time"""
+        CACHE[key] = data
+        CACHE_EXPIRY[key] = time.time() + CACHE_DURATION
+        logger.info(f"Cached data for {key} (expires in {CACHE_DURATION/60} minutes)")
     
     async def get_stock_price(self, ticker):
         """
-        Get the current price of a stock using yfinance.
+        Get the current price of a stock using Alpha Vantage.
         
         Parameters:
             ticker (str): The stock ticker symbol
@@ -28,84 +85,174 @@ class TradingService:
         Returns:
             float: The current stock price or None if not found
         """
+        # Check cache first
+        cache_key = f"price_{ticker}"
+        cached_price = self._get_cached_data(cache_key)
+        if cached_price is not None:
+            return cached_price
+        
+        await self._rate_limit_request()
+        
         try:
-            import yfinance as yf
-            import requests.exceptions
-            import json.decoder
+            # Get global quote
+            params = {
+                "function": "GLOBAL_QUOTE",
+                "symbol": ticker,
+                "apikey": ALPHA_VANTAGE_API_KEY
+            }
             
-            # This is a synchronous call, so we'll run it in a thread pool
-            loop = asyncio.get_event_loop()
+            response = await self.session.get(ALPHA_VANTAGE_BASE_URL, params=params)
+            data = response.json()
             
-            # Define the function to run in the thread pool with better error handling
-            def fetch_price():
-                try:
-                    stock = yf.Ticker(ticker)
-                    
-                    # Method 1: Try fast_info.last_price (newest and fastest method)
-                    try:
-                        price = stock.fast_info.last_price
-                        if price and price > 0:
-                            logger.info(f"Got price for {ticker} using fast_info: ${price}")
-                            return price
-                    except (AttributeError, KeyError) as e:
-                        logger.debug(f"fast_info not available for {ticker}: {e}")
-                    
-                    # Method 2: Try info dictionary with fallbacks
-                    try:
-                        info = stock.info
-                        # Try multiple keys as they can change between API versions
-                        price = info.get('regularMarketPrice') or info.get('currentPrice') or info.get('price')
-                        if price and price > 0:
-                            logger.info(f"Got price for {ticker} using info dict: ${price}")
-                            return price
-                    except (AttributeError, KeyError, ValueError) as e:
-                        logger.debug(f"Info dict not available for {ticker}: {e}")
-                    
-                    # Method 3: Try 1-minute interval data for most recent price
-                    try:
-                        minute_data = stock.history(period="1d", interval="1m")
-                        if not minute_data.empty:
-                            price = minute_data['Close'].iloc[-1]
-                            if price and price > 0:
-                                logger.info(f"Got price for {ticker} using minute data: ${price}")
-                                return price
-                    except Exception as e:
-                        logger.debug(f"Minute data not available for {ticker}: {e}")
-                    
-                    # Method 4: Try daily data as last resort
-                    daily_data = stock.history(period="1d")
-                    if not daily_data.empty:
-                        price = daily_data['Close'].iloc[0]
-                        logger.info(f"Got price for {ticker} using daily data: ${price}")
-                        return price
-                        
-                    logger.warning(f"No price data available for {ticker} after trying all methods")
-                    return None
-                        
-                except (requests.exceptions.RequestException, json.decoder.JSONDecodeError, 
-                        ValueError, KeyError, IndexError) as e:
-                    logger.warning(f"Error fetching data for {ticker}: {str(e)}")
-                
-                return None
+            if "Global Quote" in data and data["Global Quote"]:
+                price = float(data["Global Quote"]["05. price"])
+                if price > 0:
+                    logger.info(f"Got price for {ticker}: ${price}")
+                    self._cache_data(cache_key, price)
+                    return price
             
-            # Run the function in a thread pool with a timeout
-            try:
-                price_task = asyncio.create_task(loop.run_in_executor(None, fetch_price))
-                # Wait for task with a timeout
-                price = await asyncio.wait_for(price_task, timeout=10.0)
-            except asyncio.TimeoutError:
-                logger.error(f"Timeout fetching price for {ticker}")
-                return None
-            
-            if price:
-                return price
-            else:
-                logger.error(f"Could not get price for {ticker}")
-                return None
+            logger.warning(f"No price data available for {ticker}")
+            return None
                 
         except Exception as e:
             logger.error(f"Error getting stock price for {ticker}: {e}")
             return None
+    
+    async def get_market_summary(self):
+        """
+        Get a summary of the current market state using Alpha Vantage.
+        
+        Returns:
+            dict: Market summary data including major indices and news
+        """
+        # Check cache first for the entire market summary
+        cache_key = "market_summary"
+        cached_summary = self._get_cached_data(cache_key)
+        if cached_summary is not None:
+            return cached_summary
+            
+        try:
+            # Define function to get index data
+            async def get_index_data(symbol):
+                # Check cache for this specific index
+                index_cache_key = f"index_{symbol}"
+                cached_index = self._get_cached_data(index_cache_key)
+                if cached_index is not None:
+                    return cached_index
+                    
+                await self._rate_limit_request()
+                
+                try:
+                    # Get global quote for the index
+                    params = {
+                        "function": "GLOBAL_QUOTE",
+                        "symbol": symbol,
+                        "apikey": ALPHA_VANTAGE_API_KEY
+                    }
+                    
+                    response = await self.session.get(ALPHA_VANTAGE_BASE_URL, params=params)
+                    data = response.json()
+                    
+                    if "Global Quote" in data and data["Global Quote"]:
+                        current = float(data["Global Quote"]["05. price"])
+                        previous = float(data["Global Quote"]["08. previous close"])
+                        change = float(data["Global Quote"]["09. change"])
+                        change_percent = float(data["Global Quote"]["10. change percent"].rstrip("%"))
+                        
+                        result = {
+                            'price': current,
+                            'change': change,
+                            'change_percent': change_percent
+                        }
+                        
+                        self._cache_data(index_cache_key, result)
+                        logger.info(f"Successfully fetched {symbol} data")
+                        return result
+                    
+                    logger.warning(f"No data available for {symbol}")
+                    return None
+                    
+                except Exception as e:
+                    logger.error(f"Error fetching data for {symbol}: {str(e)}")
+                    return None
+            
+            # Define index symbols
+            index_symbols = {
+                "S&P 500": "SPY",  # SPDR S&P 500 ETF
+                "Dow Jones": "DIA",  # SPDR Dow Jones Industrial Average ETF
+                "NASDAQ": "QQQ"   # Invesco QQQ Trust
+            }
+            
+            # Get data for each index
+            sp500 = await get_index_data(index_symbols["S&P 500"])
+            dow = await get_index_data(index_symbols["Dow Jones"])
+            nasdaq = await get_index_data(index_symbols["NASDAQ"])
+            
+            # Log success or failure for each index
+            logger.info(f"Market data fetch results - S&P 500: {'Success' if sp500 else 'Failed'}, "
+                      f"Dow: {'Success' if dow else 'Failed'}, "
+                      f"Nasdaq: {'Success' if nasdaq else 'Failed'}")
+            
+            # Get real market news from feeds
+            try:
+                # Get real news items
+                news_headlines = await self.news_service.get_market_news_summary(max_items=5)
+                news = [{"headline": line.strip()} for line in news_headlines.split("\n") if line.strip()]
+                
+                # If no news is available, just leave it empty
+                if not news:
+                    news = [{"headline": "No market news available at this time"}]
+            except Exception as news_error:
+                logger.error(f"Error fetching market news: {news_error}")
+                # Simple fallback with no fake news
+                news = [{"headline": "Unable to retrieve market news at this time"}]
+            
+            # Helper function to safely format index data
+            def format_index(index_data):
+                if not index_data:
+                    return "Unknown (N/A)"
+                    
+                price = index_data.get('price')
+                change = index_data.get('change_percent')
+                
+                if isinstance(price, (int, float)) and isinstance(change, (int, float)):
+                    return f"{price:.2f} ({change:.2f}%)"
+                elif isinstance(change, (int, float)):
+                    return f"Unknown ({change:.2f}%)"
+                else:
+                    return "Unknown (N/A)"
+            
+            # Create the market summary
+            news_text = ""
+            for item in news:
+                headline = item.get('headline', '')
+                summary_text = item.get('summary', '')
+                if headline:
+                    if summary_text:
+                        news_text += f"{headline}: {summary_text}\n"
+                    else:
+                        news_text += f"{headline}\n"
+            
+            summary = {
+                'sp500': format_index(sp500),
+                'dow': format_index(dow),
+                'nasdaq': format_index(nasdaq),
+                'top_news': news_text.strip()
+            }
+            
+            # Cache the entire summary
+            self._cache_data(cache_key, summary)
+            
+            return summary
+            
+        except Exception as e:
+            logger.error(f"Error getting market summary: {e}")
+            return {
+                'sp500': 'Unknown',
+                'dow': 'Unknown',
+                'nasdaq': 'Unknown',
+                'top_news': 'No major news available at this time.'
+            }
     
     async def execute_paper_trade(self, user_id, action, ticker, quantity):
         """
@@ -246,194 +393,100 @@ class TradingService:
             logger.error(f"Error executing paper trade: {e}")
             return {"status": "error", "message": str(e)}
     
-    async def get_market_summary(self):
+    async def get_user_portfolio(self, user_id):
         """
-        Get a summary of the current market state.
+        Get a user's portfolio.
         
+        Parameters:
+            user_id (str): The user's ID
+            
         Returns:
-            dict: Market summary data including major indices and news
+            dict: User portfolio
+            
+        Raises:
+            ValueError: If the user is not found or portfolio cannot be fetched.
         """
         try:
-            import yfinance as yf
-            import requests.exceptions
-            import json.decoder
+            logger.info(f"Fetching portfolio for user: {user_id}")
+            supabase = self.supabase
             
-            # Define function to get index data with improved error handling
-            async def get_index_data(symbol):
-                loop = asyncio.get_event_loop()
-                
-                def fetch_index():
-                    try:
-                        # Set a timeout for the request
-                        index = yf.Ticker(symbol)
-                        
-                        # Method 1: Try fast_info for current data
-                        try:
-                            fast_info = index.fast_info
-                            current = fast_info.last_price
-                            previous = fast_info.previous_close
-                            if current and previous and current > 0 and previous > 0:
-                                change = current - previous
-                                change_percent = (change / previous) * 100
-                                logger.info(f"Successfully fetched {symbol} data using fast_info")
-                                return {
-                                    'price': current,
-                                    'change': change,
-                                    'change_percent': change_percent
-                                }
-                        except (AttributeError, KeyError) as e:
-                            logger.debug(f"fast_info not available for {symbol}: {e}")
-                        
-                        # Method 2: Try info dictionary
-                        try:
-                            info = index.info
-                            current = info.get('regularMarketPrice') or info.get('currentPrice') or info.get('price')
-                            previous = info.get('regularMarketPreviousClose') or info.get('previousClose')
-                            if current and previous and current > 0 and previous > 0:
-                                change = current - previous
-                                change_percent = (change / previous) * 100
-                                logger.info(f"Successfully fetched {symbol} data using info dict")
-                                return {
-                                    'price': current,
-                                    'change': change,
-                                    'change_percent': change_percent
-                                }
-                        except (AttributeError, KeyError, ValueError) as e:
-                            logger.debug(f"Info dict not available for {symbol}: {e}")
-                            
-                        # Method 3: Try 1-minute data for most recent price
-                        try:
-                            minute_data = index.history(period="2d", interval="1m")
-                            if not minute_data.empty and len(minute_data) > 60:  # At least one hour of data
-                                current = minute_data['Close'].iloc[-1]
-                                # Use yesterday's close for previous
-                                yesterday_data = index.history(period="2d")
-                                if len(yesterday_data) >= 2:
-                                    previous = yesterday_data['Close'].iloc[-2]
-                                    change = current - previous
-                                    change_percent = (change / previous) * 100
-                                    logger.info(f"Successfully fetched {symbol} data using minute data")
-                                    return {
-                                        'price': current,
-                                        'change': change,
-                                        'change_percent': change_percent
-                                    }
-                        except Exception as e:
-                            logger.debug(f"Minute data not available for {symbol}: {e}")
-                            
-                        # Method 4: Fall back to original method with daily data
-                        data = index.history(period="2d")
-                        if not data.empty and len(data) >= 2:
-                            current = data['Close'].iloc[-1]
-                            previous = data['Close'].iloc[-2]
-                            change = current - previous
-                            change_percent = (change / previous) * 100
-                            logger.info(f"Successfully fetched {symbol} data using daily data")
-                            return {
-                                'price': current,
-                                'change': change,
-                                'change_percent': change_percent
-                            }
-                        elif not data.empty and len(data) == 1:
-                            # Only one day available, use small change
-                            current = data['Close'].iloc[-1]
-                            # Assume zero change
-                            change = 0
-                            change_percent = 0
-                            logger.warning(f"Only 1 day of data available for {symbol}")
-                            return {
-                                'price': current,
-                                'change': change,
-                                'change_percent': change_percent
-                            }
-                            
-                        logger.warning(f"No data available for {symbol} after trying all methods")
-                        return None
-                        
-                    except (requests.exceptions.RequestException, json.decoder.JSONDecodeError, 
-                            ValueError, KeyError, IndexError) as e:
-                        logger.error(f"Error fetching data for {symbol}: {str(e)}")
-                    
-                    # If any exception or empty data, return None
-                    return None
-                
-                try:
-                    return await loop.run_in_executor(None, fetch_index)
-                except Exception as e:
-                    logger.error(f"Thread pool error for {symbol}: {str(e)}")
-                    return None
+            # Get user info using maybe_single()
+            user_info_response = supabase.table('users').select('id, cash_balance').eq('id', user_id).maybe_single().execute()
             
-            # Try to get market indices with a timeout
-            try:
-                # Use asyncio.wait_for to add timeout
-                sp500_task = asyncio.create_task(get_index_data("^GSPC"))  # S&P 500
-                dow_task = asyncio.create_task(get_index_data("^DJI"))     # Dow Jones
-                nasdaq_task = asyncio.create_task(get_index_data("^IXIC")) # NASDAQ
-                
-                # Wait for all tasks with a timeout
-                done, pending = await asyncio.wait(
-                    [sp500_task, dow_task, nasdaq_task], 
-                    timeout=15.0  # Increased timeout for production
-                )
-                
-                # Cancel any pending tasks
-                for task in pending:
-                    task.cancel()
-                
-                # Get results, handling timeouts
-                sp500 = sp500_task.result() if sp500_task in done and not sp500_task.exception() else None
-                dow = dow_task.result() if dow_task in done and not dow_task.exception() else None
-                nasdaq = nasdaq_task.result() if nasdaq_task in done and not nasdaq_task.exception() else None
-                
-                # Log success or failure for each index
-                logger.info(f"Market data fetch results - S&P 500: {'Success' if sp500 else 'Failed'}, "
-                          f"Dow: {'Success' if dow else 'Failed'}, "
-                          f"Nasdaq: {'Success' if nasdaq else 'Failed'}")
+            # Error handling for maybe_single(): Check for data directly
+            # The client might raise exceptions for connection errors, caught by outer try/except
+            if not user_info_response.data:
+                logger.error(f"User {user_id} not found in database (using maybe_single)." )
+                raise ValueError(f"User {user_id} not found")
             
-            except asyncio.TimeoutError:
-                logger.error("Timeout fetching market indices")
-                sp500, dow, nasdaq = None, None, None
-            except Exception as e:
-                logger.error(f"Error fetching market indices: {str(e)}")
-                sp500, dow, nasdaq = None, None, None
+            user = user_info_response.data
+            cash_balance = user.get('cash_balance', 0)
+            logger.info(f"User {user_id} found with cash balance: {cash_balance}")
             
-            # Get market news
-            news = [
-                {"headline": "Fed Announces Interest Rate Decision", "summary": "The Federal Reserve announced it will maintain current interest rates."},
-                {"headline": "Tech Stocks Rally on Earnings", "summary": "Major tech companies reported better-than-expected earnings, driving market gains."},
-                {"headline": "Oil Prices Drop Amid Supply Concerns", "summary": "Crude oil prices fell 2% as OPEC+ considers increasing production."}
-            ]
+            # Get portfolio positions (standard execute)
+            portfolio_response = supabase.table('portfolios').select('ticker, quantity, avg_price').eq('user_id', user_id).execute()
             
-            # Helper function to safely format index data
-            def format_index(index_data):
-                if not index_data:
-                    return "Unknown (N/A)"
-                    
-                price = index_data.get('price')
-                change = index_data.get('change_percent')
+            # Standard error handling for execute()
+            # APIResponse doesn't have .error attribute in newer Supabase client versions
+            # Just use the data directly
+            portfolio_data = portfolio_response.data
+            
+            if portfolio_data is None:
+                logger.error(f"Supabase error fetching portfolio for user {user_id}: Portfolio data is None")
+                raise ValueError(f"Database error fetching portfolio: No data returned")
+            logger.info(f"Fetched {len(portfolio_data)} positions for user {user_id}")
+            
+            # Use asyncio.gather for concurrent price fetching
+            price_tasks = []
+            for position in portfolio_data:
+                price_tasks.append(self.get_stock_price(position['ticker']))
                 
-                if isinstance(price, (int, float)) and isinstance(change, (int, float)):
-                    return f"{price:.2f} ({change:.2f}%)"
-                elif isinstance(change, (int, float)):
-                    return f"Unknown ({change:.2f}%)"
+            current_prices = await asyncio.gather(*price_tasks, return_exceptions=True)
+            
+            positions = []
+            portfolio_value = cash_balance
+            
+            for i, position in enumerate(portfolio_data):
+                ticker = position['ticker']
+                quantity = position['quantity']
+                avg_price = position['avg_price']
+                
+                # Get current price result
+                current_price_result = current_prices[i]
+                
+                if isinstance(current_price_result, Exception):
+                    logger.error(f"Error getting price for {ticker} during portfolio calculation: {current_price_result}")
+                    current_price = avg_price # Fallback
+                elif current_price_result is None:
+                    logger.warning(f"Could not get current price for {ticker}, using avg price: {avg_price}")
+                    current_price = avg_price # Fallback
                 else:
-                    return "Unknown (N/A)"
+                    current_price = current_price_result
+                
+                position_value = current_price * quantity
+                portfolio_value += position_value
+                
+                positions.append({
+                    'ticker': ticker,
+                    'quantity': quantity,
+                    'avg_price': avg_price,
+                    'current_price': current_price,
+                    'value': position_value,
+                    'profit_loss': ((current_price - avg_price) / avg_price * 100) if avg_price and avg_price > 0 else 0
+                })
             
+            logger.info(f"Successfully processed portfolio for user {user_id}. Total value: {portfolio_value}")
             return {
-                'sp500': format_index(sp500),
-                'dow': format_index(dow),
-                'nasdaq': format_index(nasdaq),
-                'top_news': "\n".join([f"{item['headline']}: {item['summary']}" for item in news])
+                'portfolio_value': round(portfolio_value, 2),
+                'cash_balance': round(cash_balance, 2),
+                'positions': positions
             }
-            
+        except ValueError as ve:
+            logger.error(f"ValueError getting portfolio for {user_id}: {ve}")
+            raise
         except Exception as e:
-            logger.error(f"Error getting market summary: {e}")
-            return {
-                'sp500': 'Unknown',
-                'dow': 'Unknown',
-                'nasdaq': 'Unknown',
-                'top_news': 'No major news available at this time.'
-            }
+            logger.error(f"Unexpected error getting portfolio for {user_id}: {e}", exc_info=True)
+            raise ValueError(f"Failed to get portfolio due to an unexpected error: {str(e)}")
     
     async def get_user_summary(self, user_id):
         """
@@ -450,36 +503,17 @@ class TradingService:
             user_info = self.supabase.table('users').select('*').eq('id', user_id).execute()
             
             if not user_info.data:
-                return {"name": "buddy", "portfolio_value": 0, "recent_trades": "No recent trades."}
+                logger.error(f"User {user_id} not found in database")
+                raise ValueError(f"User {user_id} not found")
             
             user = user_info.data[0]
+            user_name = user.get('name', 'buddy')  # Default to 'buddy' if name is empty
             
-            # Get portfolio
-            portfolio = self.supabase.table('portfolios').select('*').eq('user_id', user_id).execute()
+            # Get user portfolio
+            portfolio = await self.get_user_portfolio(user_id)
             
             # Get recent trades
             recent_trades = self.supabase.table('trades').select('*').eq('user_id', user_id).order('timestamp', desc=True).limit(3).execute()
-            
-            # Calculate total portfolio value
-            portfolio_value = user['cash_balance']
-            positions = []
-            
-            for position in portfolio.data:
-                # Get current price
-                current_price = await self.get_stock_price(position['ticker'])
-                
-                if current_price:
-                    position_value = current_price * position['quantity']
-                    portfolio_value += position_value
-                    
-                    positions.append({
-                        'ticker': position['ticker'],
-                        'quantity': position['quantity'],
-                        'avg_price': position['avg_price'],
-                        'current_price': current_price,
-                        'value': position_value,
-                        'profit_loss': ((current_price - position['avg_price']) / position['avg_price']) * 100
-                    })
             
             # Format recent trades
             formatted_trades = []
@@ -489,13 +523,16 @@ class TradingService:
                 )
             
             return {
-                'name': user['name'],
-                'portfolio_value': round(portfolio_value, 2),
-                'cash_balance': round(user['cash_balance'], 2),
-                'positions': positions,
+                'name': user_name,
+                'portfolio_value': portfolio['portfolio_value'],
+                'cash_balance': portfolio['cash_balance'],
+                'positions': portfolio['positions'],
                 'recent_trades': "; ".join(formatted_trades) if formatted_trades else "No recent trades."
             }
             
+        except ValueError:
+            # Re-raise user not found error
+            raise
         except Exception as e:
             logger.error(f"Error getting user summary: {e}")
-            return {"name": "buddy", "portfolio_value": 0, "recent_trades": "No recent trades."} 
+            raise ValueError(f"Failed to get user summary: {str(e)}") 

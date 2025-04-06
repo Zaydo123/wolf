@@ -1,13 +1,16 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import '../styles/Settings.css';
 
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+
 const Settings = () => {
-  const { user, updateUser, logout } = useAuth();
+  const { user, getUserProfile, updateUser, logout } = useAuth();
+  const [userProfile, setUserProfile] = useState(null);
   const [profileData, setProfileData] = useState({
-    name: user?.name || '',
+    name: '',
     email: user?.email || '',
-    phoneNumber: user?.phoneNumber || '',
+    phoneNumber: '',
     password: '',
     confirmPassword: ''
   });
@@ -23,6 +26,28 @@ const Settings = () => {
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState('');
   const [error, setError] = useState('');
+
+  // Add useEffect to load user profile data
+  useEffect(() => {
+    async function loadUserProfile() {
+      if (user) {
+        try {
+          const profile = await getUserProfile();
+          setUserProfile(profile);
+          setProfileData(prev => ({
+            ...prev,
+            name: profile?.name || '',
+            email: profile?.email || user?.email || '',
+            phoneNumber: profile?.phone_number || ''
+          }));
+        } catch (err) {
+          console.error("Error loading user profile:", err);
+        }
+      }
+    }
+    
+    loadUserProfile();
+  }, [user, getUserProfile]);
 
   const handleProfileChange = (e) => {
     setProfileData({
@@ -260,6 +285,61 @@ const Settings = () => {
             Delete Account
           </button>
         </div>
+      </div>
+      
+      <div className="settings-section">
+        <h2>Account Repair</h2>
+        <p>If you're experiencing issues with your account, you can try repairing it.</p>
+        <button 
+          onClick={async () => {
+            if (!user || !user.id) {
+              alert('You need to be logged in to repair your account');
+              return;
+            }
+            
+            try {
+              setLoading(true);
+              
+              // Call the ensure_user_exists endpoint
+              const response = await fetch(
+                `${API_URL}/api/users/ensure/${user.id}`, 
+                {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json'
+                  },
+                  body: JSON.stringify({
+                    phone_number: profileData.phoneNumber || ''
+                  })
+                }
+              );
+              
+              if (!response.ok) {
+                throw new Error('Failed to repair account');
+              }
+              
+              const result = await response.json();
+              
+              if (result.action === 'created') {
+                alert('Account repair successful! Your user profile has been created.');
+              } else if (result.action === 'updated_phone') {
+                alert('Account repair successful! Your phone number has been updated.');
+              } else {
+                alert('Account check completed. No issues were found with your account.');
+              }
+              
+            } catch (error) {
+              console.error('Error repairing account:', error);
+              alert(`Error repairing account: ${error.message}`);
+            } finally {
+              setLoading(false);
+            }
+          }}
+          disabled={loading}
+          className="settings-button"
+        >
+          Repair My Account
+        </button>
       </div>
     </div>
   );
