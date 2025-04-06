@@ -90,6 +90,21 @@
 }
 
 .positions-table {
+  background-color: white;
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 30px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+}
+
+.positions-table h3 {
+  margin-top: 0;
+  margin-bottom: 20px;
+  font-size: 1.2rem;
+  color: #333;
+}
+
+.positions-table table {
   width: 100%;
   border-collapse: collapse;
 }
@@ -105,10 +120,20 @@
 .positions-table td {
   padding: 12px 10px;
   border-bottom: 1px solid #eee;
+  color: #707070;
+  font-family: monospace;
 }
 
 .positions-table tr:hover {
   background-color: #f9f9f9;
+}
+
+/* Additional retro styling for position values */
+.positions-table tr td:nth-child(2),  /* Quantity */
+.positions-table tr td:nth-child(3),  /* Avg Price */
+.positions-table tr td:nth-child(4) { /* Current Value */
+  font-weight: 500;
+  letter-spacing: 0.5px;
 }
 
 .action-button {
@@ -237,4 +262,130 @@
   margin-top: 15px;
   padding: 10px 20px;
   font-size: 16px;
+}
+
+/* Recent Trades Styles */
+.recent-trades-section {
+  margin-top: 30px;
+  padding: 0;
+}
+
+.recent-trades-section h3 {
+  margin-top: 0;
+  margin-bottom: 20px;
+  color: #333;
+  font-size: 1.2rem;
+}
+
+/* Retro Terminal Styling */
+.retro-terminal {
+  background-color: #000000;
+  border-radius: 8px;
+  box-shadow: 0 0 20px rgba(57, 255, 20, 0.5);
+  overflow: hidden;
+  font-family: 'Courier New', monospace;
+  border: 1px solid #39ff14;
+}
+
+.terminal-header {
+  background-color: #1a1a1a;
+  padding: 10px 15px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #39ff14;
+}
+
+.terminal-title {
+  color: #39ff14;
+  font-weight: bold;
+  letter-spacing: 1px;
+}
+
+.terminal-controls {
+  display: flex;
+  gap: 5px;
+}
+
+.control {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background-color: #555;
+}
+
+.control:nth-child(1) {
+  background-color: #ff5f57;
+}
+
+.control:nth-child(2) {
+  background-color: #ffbd2e;
+}
+
+.control:nth-child(3) {
+  background-color: #28ca41;
+}
+
+.trades-table {
+  width: 100%;
+  border-collapse: collapse;
+  color: #39ff14;
+  font-size: 0.9rem;
+}
+
+.trades-table th {
+  text-align: left;
+  padding: 12px 15px;
+  border-bottom: 1px solid #333;
+  font-weight: bold;
+}
+
+.trades-table td {
+  padding: 12px 15px;
+  border-bottom: 1px solid #222;
+}
+
+.trade-row:hover {
+  background-color: rgba(57, 255, 20, 0.1);
+}
+
+.trade-row.buy {
+  border-left: 3px solid #00C49F;
+}
+
+.trade-row.sell {
+  border-left: 3px solid #FF6666;
+}
+
+.buy-action {
+  color: #00ff00;
+  font-weight: 600;
+}
+
+.sell-action {
+  color: #ff4d4d;
+  font-weight: 600;
+}
+
+.empty-trades {
+  padding: 30px;
+  text-align: center;
+  color: #39ff14;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 15px;
+}
+
+.terminal-line {
+  line-height: 1.5;
+}
+
+.blink {
+  animation: blink 1s step-end infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
 } 

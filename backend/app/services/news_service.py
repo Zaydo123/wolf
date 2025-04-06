@@ -8,6 +8,8 @@ from time import time
 import feedparser
 import os
 import httpx
+import random
+from bs4 import BeautifulSoup
 
 # Set the log level to DEBUG if the environment is not production
 log_level = logging.DEBUG if "prod" not in (os.getenv('ENVIRONMENT') or "").lower() else logging.INFO
@@ -141,89 +143,119 @@ class NewsService:
         self.last_fetch_time = 0
         self.cache_expiry = 600  # 10 minutes in seconds
         
-    async def get_financial_news(self, max_items: int = 10, cache_bypass: bool = False) -> List[Dict[str, Any]]:
+        self.rss_feeds = [
+            'https://feeds.content.dowjones.io/public/rss/mw_topstories',
+            'https://feeds.content.dowjones.io/public/rss/mw_realtimeheadlines',
+            'http://feeds.marketwatch.com/marketwatch/bulletins',
+            'https://feeds.content.dowjones.io/public/rss/mw_marketpulse',
+            'http://feeds.reuters.com/reuters/businessNews',
+            'http://feeds.reuters.com/news/wealth',
+            'https://www.investing.com/rss/news.rss',
+            'https://www.fool.com/feeds/index.aspx',
+            'http://feeds.feedburner.com/TheStreet-Stocks'
+        ]
+        self.cache = None
+        self.cache_timestamp = None
+        
+    async def get_financial_news(self, max_items=10):
         """
-        Get financial news articles from configured RSS feeds
+        Get recent financial news from various RSS feeds.
         
         Parameters:
-            max_items (int): Maximum number of news items to return
-            cache_bypass (bool): Whether to bypass the cache
+            max_items: Maximum number of news items to return
             
         Returns:
-            List[Dict]: List of news articles with title, link, published date and summary
+            list: List of news items with title and summary
         """
-        current_time = time()
-        
-        # Check if we can use cached news
-        if not cache_bypass and current_time - self.last_fetch_time < self.cache_expiry and self.news_cache:
-            logger.info("Using cached financial news")
-            return self.news_cache[:max_items]
-        
-        logger.info("Fetching fresh financial news")
-        
-        # Run RSS parsing in a thread pool to avoid blocking
-        loop = asyncio.get_event_loop()
-        parsed_feeds = await loop.run_in_executor(
-            None,
-            lambda: self.feed_library.parse_all_feeds(fields=['title', 'link', 'published', 'summary'])
-        )
-        
-        # Extract entries from all feeds and flatten into a single list
-        news_items = []
-        for feed in parsed_feeds:
-            if 'entries' in feed:
-                for entry in feed['entries']:
-                    # Add simple processing to clean up data
-                    if 'title' in entry:
-                        # Create a cleaned news item
-                        news_item = {
-                            'title': entry.get('title', '').strip(),
-                            'link': entry.get('link', ''),
-                            'published': entry.get('published', ''),
-                            'summary': entry.get('summary', '').strip() if entry.get('summary') else ''
-                        }
-                        news_items.append(news_item)
-        
-        # Sort by published date (newest first) if available
-        # This is a simple approach - in production you'd want more robust date parsing
-        news_items.sort(key=lambda x: x.get('published', ''), reverse=True)
-        
-        # Remove duplicate titles (keeping the first/newest occurrence)
-        unique_titles = set()
-        unique_news = []
-        for item in news_items:
-            if item['title'] not in unique_titles:
-                unique_titles.add(item['title'])
-                unique_news.append(item)
-        
-        # Update cache
-        self.news_cache = unique_news
-        self.last_fetch_time = current_time
-        
-        return unique_news[:max_items]
-
-    async def get_market_news_summary(self, max_items: int = 5) -> str:
+        try:
+            # Gather all news items from feeds
+            all_news = []
+            
+            # Fetch news from each feed asynchronously
+            feed_tasks = []
+            for feed_url in self.rss_feeds:
+                feed_tasks.append(self._fetch_feed(feed_url))
+                
+            # Wait for all feeds to be fetched
+            feed_results = await asyncio.gather(*feed_tasks, return_exceptions=True)
+            
+            # Process results, excluding exceptions
+            for result in feed_results:
+                if not isinstance(result, Exception) and result:
+                    all_news.extend(result)
+            
+            # Randomize the news items
+            random.shuffle(all_news)
+            
+            # Limit to requested number of items
+            return all_news[:max_items]
+        except Exception as e:
+            logger.error(f"Error fetching financial news: {e}")
+            return []
+            
+    async def _fetch_feed(self, feed_url):
         """
-        Get a concatenated summary of the latest market news
+        Fetch news from a single RSS feed.
         
         Parameters:
-            max_items (int): Maximum number of news items to include
+            feed_url: URL of the RSS feed
             
         Returns:
-            str: Concatenated news summary or empty message if no news
+            list: News items from this feed
         """
-        news_items = await self.get_financial_news(max_items=max_items)
+        try:
+            # Use asyncio to fetch the feed
+            loop = asyncio.get_event_loop()
+            feed = await loop.run_in_executor(None, lambda: feedparser.parse(feed_url))
+            
+            results = []
+            for entry in feed.entries:
+                # Extract title and clean it
+                title = entry.title.strip()
+                
+                # Extract and clean the summary if available
+                summary = ""
+                if hasattr(entry, 'summary'):
+                    # Remove HTML tags from summary
+                    soup = BeautifulSoup(entry.summary, 'html.parser')
+                    summary = soup.get_text().strip()
+                    
+                    # Truncate summary to keep it concise
+                    if len(summary) > 150:
+                        summary = summary[:147] + "..."
+                
+                results.append({
+                    "headline": title,
+                    "summary": summary,
+                    "source": feed.feed.title if hasattr(feed, 'feed') and hasattr(feed.feed, 'title') else "Financial News",
+                    "published": entry.published if hasattr(entry, 'published') else None
+                })
+                
+            return results
+        except Exception as e:
+            logger.error(f"Error fetching feed {feed_url}: {e}")
+            return []
+    
+    async def get_market_news_summary(self, max_items=5):
+        """
+        Get a simple text summary of recent market news.
         
-        if not news_items:
-            return ""  # Return empty string instead of a message
+        Parameters:
+            max_items: Maximum number of news items to include
+            
+        Returns:
+            str: Newline-separated list of headlines
+        """
+        # Get extra items to ensure variety after shuffling
+        news_items = await self.get_financial_news(max_items=max_items+10)
         
-        # Format the news items into a simple text summary
-        summary_lines = []
-        for i, item in enumerate(news_items, 1):
-            title = item.get('title', 'Untitled')
-            summary_lines.append(f"{i}. {title}")
+        # Randomize and take the requested number
+        random.shuffle(news_items)
+        selected_items = news_items[:max_items]
         
-        return "\n".join(summary_lines)
+        # Format as newline-separated headlines
+        headlines = [item["headline"] for item in selected_items]
+        return "\n".join(headlines)
 
 
 # For testing

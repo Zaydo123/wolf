@@ -180,49 +180,27 @@ class MockQueryWithResult:
     def limit(self, n):
         return self
 
-def get_supabase_client(use_service_role=False):
-    """Get a Supabase client instance, with optional service role access."""
+def get_supabase_client(use_service_role: bool = True):
+    """
+    Get a Supabase client instance.
+    
+    Parameters:
+        use_service_role (bool): If True, use the service role key for admin access
+    
+    Returns:
+        SupabaseClient: A configured Supabase client
+    """
     try:
-        # Log the URL and key type we're trying to use
-        key_type = "Service Role" if use_service_role else "Anon"
+        # Get the appropriate key based on the role
         key = SUPABASE_SERVICE_KEY if use_service_role else SUPABASE_KEY
-        logger.info(f"Attempting to create Supabase client: URL={SUPABASE_URL} Key Type={key_type} Key Used?={bool(key)}")
         
-        if not SUPABASE_URL:
-            logger.error("SUPABASE_URL is not set")
-            return MockSupabaseClient()
-            
-        if not key:
-            logger.warning(f"{key_type} key not found, using mock client")
-            return MockSupabaseClient()
-        
-        # Create a custom httpx client with timeouts
-        timeout_settings = httpx.Timeout(
-            connect=10.0,  # connection timeout
-            read=30.0,     # read timeout
-            write=30.0,    # write timeout
-            pool=5.0       # connection pool timeout
-        )
-        
-        # Configure the httpx client with retry logic
-        timeout_settings = httpx.Timeout(
-            connect=10.0,  # connection timeout
-            read=30.0,     # read timeout
-            write=30.0,    # write timeout
-            pool=5.0       # connection pool timeout
-        )
-        
-        # Version 2.3.0 of supabase package has a different interface
-        logger.info(f"Creating Supabase client with URL: {SUPABASE_URL} and basic settings")
-        client = create_client(
-            SUPABASE_URL, 
-            key
-        )
-        logger.info("Supabase client created successfully with enhanced options")
+        # Create and return the client
+        client = create_client(SUPABASE_URL, key)
+        logger.info(f"Created Supabase client with {'service' if use_service_role else 'anon'} role")
         return client
     except Exception as e:
-        logger.error(f"Error creating Supabase client: {str(e)}")
-        logger.exception(e)  # Log full traceback
+        logger.error(f"Error creating Supabase client: {e}")
+        # Return mock client as fallback
         return MockSupabaseClient()
 
 def create_mock_client():

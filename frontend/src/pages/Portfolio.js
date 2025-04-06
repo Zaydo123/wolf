@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend } from 'recharts';
-import { fetchData } from '../utils/apiUtils';
+import { fetchData, postData } from '../utils/apiUtils';
 import '../styles/Portfolio.css';
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8', '#FF6666'];
@@ -26,6 +26,11 @@ const Portfolio = ({ socket }) => {
     
     try {
       console.log(`Fetching portfolio for user ID: ${user.id}`);
+      
+      // First, call the update-prices endpoint to refresh data
+      console.log('Updating portfolio prices...');
+      await postData(`/api/trades/portfolio/${user.id}/update-prices`);
+      console.log('Portfolio prices updated successfully');
       
       // Use the fetchData utility for better error handling and retries
       const data = await fetchData(`/api/trades/portfolio/${user.id}`);

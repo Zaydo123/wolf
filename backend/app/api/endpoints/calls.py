@@ -287,11 +287,15 @@ async def connect_call(user_id: str, request: Request):
         # Generate TwiML response with the broker intro
         twiml = await twilio_service.generate_welcome_twiml(broker_intro)
         
+        # Get the call SID from the request
+        form_data = await request.form()
+        call_sid = form_data.get('CallSid')
+        
         # Log the broker's intro with service role client
         supabase = get_supabase_client(use_service_role=True)
         supabase.table('call_logs').insert({
             'user_id': user_id,
-            'call_sid': 'connect-endpoint',  # Placeholder for calls from connect endpoint
+            'call_sid': call_sid,  # Use actual call SID
             'direction': 'outbound',
             'content': broker_intro,
             'timestamp': datetime.datetime.utcnow().isoformat()
@@ -318,6 +322,18 @@ async def process_speech(request: Request):
         phone_number = form_data.get('From')  # This is the caller's phone number
         call_sid = form_data.get('CallSid')
         
+        # Skip Twilio numbers (they start with +1888)
+        if phone_number and phone_number.startswith('+1888'):
+            logger.info(f"Skipping Twilio number: {phone_number}")
+            # Get the actual user's phone number from the To field
+            phone_number = form_data.get('To')
+            if not phone_number:
+                logger.error("No user phone number found in To field")
+                response = VoiceResponse()
+                response.say("Sorry, there was a problem identifying your account. Please try again later.", voice='Polly.Matthew')
+                response.hangup()
+                return Response(content=str(response), media_type="application/xml")
+        
         # Look up the user by phone number instead of using it as ID
         supabase = get_supabase_client(use_service_role=True)
         
@@ -333,7 +349,7 @@ async def process_speech(request: Request):
                 if phone_number.startswith('+'):
                     user_result = supabase.table('users').select('id').eq('phone_number', phone_number[1:]).execute()
         
-        # If we still couldn't find the user, use a default ID for demo purposes
+        # If we still couldn't find the user, return error
         if not user_result or not user_result.data:
             logger.error(f"Could not find user by phone number: {phone_number}")
             response = VoiceResponse()
@@ -354,7 +370,6 @@ async def process_speech(request: Request):
             return Response(content=twiml, media_type="application/xml")
         
         # Log the user's speech with service role
-        supabase = get_supabase_client(use_service_role=True)
         supabase.table('call_logs').insert({
             'user_id': user_id,
             'call_sid': call_sid,
@@ -363,56 +378,210 @@ async def process_speech(request: Request):
             'timestamp': datetime.datetime.utcnow().isoformat()
         }).execute()
         
-        # Parse the intent using Gemini - could be trading or conversation
-        intent = await gemini_service.parse_trading_intent(transcription)
+        # STEP 1: Check if this is a price check query
+        is_price_check, ticker = await gemini_service._check_for_price_query(transcription)
         
-        # Check if this is a conversational query
-        if intent.get('is_conversation', False):
-            logger.info(f"Handling conversational query: {intent.get('query')}")
+        # Get the full call transcript so far to provide context
+        call_transcript = []
+        if call_sid:
+            previous_logs = supabase.table('call_logs').select('*')\
+                .eq('call_sid', call_sid)\
+                .order('timestamp')\
+                .execute()
+                
+            if previous_logs.data:
+                for log in previous_logs.data:
+                    speaker = "Broker" if log['direction'] == 'outbound' else "User"
+                    timestamp = datetime.datetime.fromisoformat(log['timestamp'].replace('Z', '+00:00')).strftime('%H:%M:%S')
+                    call_transcript.append({
+                        'speaker': speaker,
+                        'content': log['content'],
+                        'timestamp': timestamp
+                    })
+                logger.info(f"Retrieved {len(call_transcript)} messages from current conversation")
+        
+        # Get previous call history (last 3 calls)
+        previous_calls = []
+        try:
+            # Get the user's previous calls (exclude current call)
+            past_calls = supabase.table('calls').select('id,call_sid,started_at,status')\
+                .eq('user_id', user_id)\
+                .neq('call_sid', call_sid)\
+                .order('started_at', desc=True)\
+                .limit(3)\
+                .execute()
+                
+            if past_calls.data:
+                for call in past_calls.data:
+                    # For each call, get a sample of the logs
+                    call_summary = {
+                        'date': datetime.datetime.fromisoformat(call['started_at'].replace('Z', '+00:00')).strftime('%Y-%m-%d'),
+                        'highlights': []
+                    }
+                    
+                    # Get important logs from this call (e.g., trades, recommendations)
+                    call_logs = supabase.table('call_logs').select('*')\
+                        .eq('call_sid', call['call_sid'])\
+                        .order('timestamp')\
+                        .execute()
+                    
+                    if call_logs.data:
+                        # Find any trade actions or recommendations
+                        for log in call_logs.data:
+                            content = log['content'].upper()
+                            if 'BUY' in content or 'SELL' in content or 'RECOMMEND' in content:
+                                call_summary['highlights'].append({
+                                    'speaker': 'Broker' if log['direction'] == 'outbound' else 'User',
+                                    'content': log['content']
+                                })
+                                
+                        # Get at least one exchange (first broker message and user response)
+                        if not call_summary['highlights'] and len(call_logs.data) >= 2:
+                            for i, log in enumerate(call_logs.data):
+                                if log['direction'] == 'outbound' and i < len(call_logs.data) - 1:
+                                    call_summary['highlights'].append({
+                                        'speaker': 'Broker',
+                                        'content': log['content']
+                                    })
+                                    # Get next user response
+                                    next_log = call_logs.data[i+1]
+                                    if next_log['direction'] == 'inbound':
+                                        call_summary['highlights'].append({
+                                            'speaker': 'User',
+                                            'content': next_log['content']
+                                        })
+                                    break
+                                    
+                    if call_summary['highlights']:
+                        previous_calls.append(call_summary)
+                
+                logger.info(f"Retrieved highlights from {len(previous_calls)} previous calls")
+        except Exception as e:
+            logger.error(f"Error retrieving previous call history: {e}")
+            # Continue without previous calls if there's an error
+        
+        # Get user data with full context
+        user_data = await trading_service.get_user_summary(user_id)
+        # Add call transcript to user data
+        user_data['call_transcript'] = call_transcript
+        # Add previous calls to user data
+        user_data['previous_calls'] = previous_calls
+        
+        if is_price_check and ticker:
+            logger.info(f"Detected price check query for ticker: {ticker}")
             
-            # Get market and user data for context
-            market_data = await trading_service.get_market_summary()
-            user_data = await trading_service.get_user_summary(user_id)
+            # Generate price check response
+            broker_response = await gemini_service._generate_price_check_response(ticker, user_data)
+            logger.info(f"Generated price check response: {broker_response}")
             
-            # Generate a conversational response
-            broker_response = await gemini_service.generate_conversation_response(
-                intent.get('query'), 
-                user_data, 
-                market_data
-            )
-            
-        # Otherwise, handle as a trading intent
         else:
-            # If we couldn't parse all required trading fields, try handling as conversation
-            if not all([intent.get('action'), intent.get('ticker'), intent.get('quantity')]):
-                logger.info(f"Incomplete trading intent, treating as conversation: {transcription}")
-                
-                # Get market and user data for context
-                market_data = await trading_service.get_market_summary()
-                user_data = await trading_service.get_user_summary(user_id)
-                
-                # Generate conversation response to the ambiguous query
-                broker_response = await gemini_service.generate_conversation_response(
-                    transcription, 
-                    user_data, 
-                    market_data
-                )
+            # STEP 2: If not a price check, generate trading intent
+            trading_intent = await gemini_service.generate_trading_order(transcription)
+            logger.info(f"Generated trading intent: {trading_intent}")
+            
+            # Check for positive responses to recommendations
+            positive_responses = ["yes", "yeah", "sure", "okay", "ok", "let's do it", "sounds good", "i agree", "go ahead"]
+            is_agreement = any(phrase in transcription.lower() for phrase in positive_responses)
+            
+            # STEP 3: Handle based on intent type
+            if trading_intent.get('is_conversation', False):
+                # CASE A: Conversational query
+                if is_agreement:
+                    # If agreement, check for recent recommendation
+                    logger.info(f"User appears to agree with recommendation: {transcription}")
+                    
+                    # Find most recent broker message
+                    recent_logs = supabase.table('call_logs').select('*')\
+                        .eq('call_sid', call_sid)\
+                        .eq('direction', 'outbound')\
+                        .order('timestamp', desc=True)\
+                        .limit(1)\
+                        .execute()
+                    
+                    recommendation_found = False
+                    if recent_logs.data:
+                        broker_message = recent_logs.data[0]['content']
+                        # Extract stock symbols
+                        import re
+                        potential_tickers = re.findall(r'\b[A-Z]{1,5}\b', broker_message)
+                        
+                        # Look for buy/sell actions
+                        buy_phrases = ["buy", "purchase", "get", "picking up"]
+                        sell_phrases = ["sell", "dump", "get rid of"]
+                        
+                        # Default action is buy
+                        action = "buy"
+                        for phrase in sell_phrases:
+                            if phrase in broker_message.lower():
+                                action = "sell"
+                                break
+                        
+                        # Find quantity
+                        quantity_match = re.search(r'(\d+)\s+shares', broker_message)
+                        quantity = 10  # Default
+                        if quantity_match:
+                            quantity = int(quantity_match.group(1))
+                        
+                        # Use first ticker found
+                        if potential_tickers:
+                            ticker = potential_tickers[0]
+                            recommendation_found = True
+                            
+                            logger.info(f"Extracted recommendation: {action} {quantity} shares of {ticker}")
+                            
+                            # Execute the trade
+                            trade_result = await trading_service.execute_paper_trade(user_id, action, ticker, quantity)
+                            logger.info(f"Trade result: {trade_result}")
+                            
+                            # Generate broker response
+                            recommendation_intent = {
+                                'action': action,
+                                'ticker': ticker,
+                                'quantity': quantity,
+                                'is_conversation': False
+                            }
+                            broker_response = await gemini_service.generate_broker_response(recommendation_intent, trade_result, user_data)
+                            logger.info(f"Generated broker response: {broker_response}")
+                    
+                    # If no recommendation found, handle as conversation
+                    if not recommendation_found:
+                        logger.info(f"Handling as regular conversation: {transcription}")
+                        market_data = await trading_service.get_market_summary()
+                        user_data = await trading_service.get_user_summary(user_id)
+                        broker_response = await gemini_service.generate_conversation_response(
+                            trading_intent.get('query', transcription), 
+                            user_data, 
+                            market_data
+                        )
+                else:
+                    # Regular conversation
+                    logger.info(f"Handling conversation: {trading_intent.get('query')}")
+                    market_data = await trading_service.get_market_summary()
+                    user_data = await trading_service.get_user_summary(user_id)
+                    broker_response = await gemini_service.generate_conversation_response(
+                        trading_intent.get('query', transcription), 
+                        user_data, 
+                        market_data
+                    )
             else:
-                # Execute the paper trade
-                trade_result = await trading_service.execute_paper_trade(
-                    user_id, 
-                    intent['action'], 
-                    intent['ticker'], 
-                    intent['quantity']
-                )
+                # CASE B: Trading intent
+                logger.info(f"Executing trade: {trading_intent['action']} {trading_intent['quantity']} {trading_intent['ticker']}")
                 
-                # Generate broker response for the trade result
-                broker_response = await gemini_service.generate_broker_response(intent, trade_result)
+                # Validate that ticker and quantity are not None before executing the trade
+                if not trading_intent.get('ticker') or not trading_intent.get('quantity'):
+                    logger.error(f"Invalid trading intent - missing required parameters: {trading_intent}")
+                    broker_response = "I couldn't process that trade request because some required information is missing. Please provide a stock ticker symbol and quantity."
+                else:
+                    # Execute the trade only if we have valid parameters
+                    trade_result = await trading_service.execute_paper_trade(user_id, trading_intent['action'], trading_intent['ticker'], trading_intent['quantity'])
+                    logger.info(f"Trade result: {trade_result}")
+                    
+                    broker_response = await gemini_service.generate_broker_response(trading_intent, trade_result, user_data)
+                    logger.info(f"Broker response: {broker_response}")
         
-        # Generate TwiML with the broker response
+        # STEP 4: Generate response and log it
         twiml = await twilio_service.generate_response_twiml(broker_response, gather_again=True)
         
-        # Log the broker's response - still using the same service role client from above
         supabase.table('call_logs').insert({
             'user_id': user_id,
             'call_sid': call_sid,
@@ -421,18 +590,12 @@ async def process_speech(request: Request):
             'timestamp': datetime.datetime.utcnow().isoformat()
         }).execute()
         
-        # Broadcast the trade result to WebSocket clients
-        # In a real app, you'd use a message queue for this
-        # For hackathon purposes, we'll just return the TwiML
-        
         return Response(content=twiml, media_type="application/xml")
     except Exception as e:
         logger.error(f"Error processing speech: {e}")
-        # Return a simple TwiML response in case of error
         response = VoiceResponse()
         response.say("Sorry, there was a problem processing your request. Please try again.", voice='Polly.Matthew')
         
-        # Ensure proper URL formatting
         backend_url = BACKEND_URL.rstrip('/')
         gather = Gather(
             input='speech',
@@ -457,22 +620,56 @@ async def retry_prompt(request: Request):
         call_sid = form_data.get('CallSid')
         phone_number = form_data.get('From')
         
+        # Skip Twilio numbers (they start with +1888)
+        if phone_number and phone_number.startswith('+1888'):
+            logger.info(f"Skipping Twilio number: {phone_number}")
+            # Get the actual user's phone number from the To field
+            phone_number = form_data.get('To')
+            if not phone_number:
+                logger.error("No user phone number found in To field")
+                response = VoiceResponse()
+                response.say("Sorry, there was a problem identifying your account. Please try again later.", voice='Polly.Matthew')
+                response.hangup()
+                return Response(content=str(response), media_type="application/xml")
+        
         # Look up the user by phone number
         supabase = get_supabase_client(use_service_role=True)
-        user_result = supabase.table('users').select('id').eq('phone_number', phone_number).execute()
         
-        # If user not found, return error message
-        if not user_result.data:
-            logger.error(f"Could not find user by phone number: {phone_number}")
-            response = VoiceResponse()
-            response.say("Sorry, I couldn't find your account. Please register on our website first.", voice='Polly.Matthew')
-            response.hangup()
-            return Response(content=str(response), media_type="application/xml")
+        # Get user by phone number - try looking up the current call first
+        call_result = supabase.table('calls').select('user_id').eq('call_sid', call_sid).execute()
+        
+        user_id = None
+        if call_result.data and call_result.data[0]:
+            user_id = call_result.data[0]['user_id']
+            logger.info(f"Found user ID {user_id} from call record")
+        else:
+            # Fall back to looking up by phone number
+            user_result = supabase.table('users').select('id').eq('phone_number', phone_number).execute()
             
-        user_id = user_result.data[0]['id']
+            # If that fails, try with additional formatting variations
+            if not user_result.data:
+                # Try a version without the leading +
+                if phone_number.startswith('+'):
+                    user_result = supabase.table('users').select('id').eq('phone_number', phone_number[1:]).execute()
+                    
+            if user_result.data:
+                user_id = user_result.data[0]['id']
+            else:
+                logger.error(f"Could not find user by phone number: {phone_number}")
+                response = VoiceResponse()
+                response.say("Sorry, I couldn't find your account. Please register on our website first.", voice='Polly.Matthew')
+                response.hangup()
+                return Response(content=str(response), media_type="application/xml")
         
-        # Generate a friendly retry prompt
-        retry_prompt = "I didn't hear anything. What would you like to do today? You can ask about your portfolio, check market conditions, or place a trade."
+        # Get market and user data for context
+        market_data = await trading_service.get_market_summary()
+        user_data = await trading_service.get_user_summary(user_id)
+        
+        # Generate a stock recommendation
+        recommendation = await gemini_service.generate_stock_recommendation(user_data, market_data)
+        
+        # Generate a retry prompt with a stock recommendation
+        retry_prompt = f"Hey, you still there? I've got a hot tip for you - I'm recommending {recommendation['quantity']} shares of {recommendation['ticker']}. {recommendation['rationale']} By the way, you can ask me for the latest price on any stock. Just say something like 'What's AAPL trading at?' So, what do you think? Want to {recommendation['action']} some {recommendation['ticker']} today or check prices on something else?"
         
         # Generate TwiML with the retry prompt
         twiml = await twilio_service.generate_response_twiml(retry_prompt, gather_again=True)
@@ -622,7 +819,7 @@ async def handle_inbound_call(request: Request):
         # Get user by phone number
         supabase = get_supabase_client()
         user_result = supabase.table('users').select('*').eq('phone_number', formatted_phone).execute()
-            
+        
         # If user not found, return error message
         if not user_result.data:
             logger.warning(f"User not found for number {formatted_phone}")
@@ -671,7 +868,7 @@ async def handle_inbound_call(request: Request):
         response = VoiceResponse()
         response.say("Sorry, there was a problem connecting to your broker. Please try again later.", voice='Polly.Matthew')
         response.hangup()
-        return Response(content=str(response), media_type="application/xml")
+        return Response(content=str(response), media_type="application/xml") 
 
 @router.websocket("/stream/{call_id}")
 async def websocket_endpoint(websocket: WebSocket, call_id: str):
@@ -852,7 +1049,7 @@ async def get_call_history(user_id: str, limit: int = 20):
                 try:
                     call_logs = supabase.table('call_logs').select('*')\
                         .eq('call_sid', call['call_sid'])\
-                        .order('timestamp', asc=True)\
+                        .order('timestamp')\
                         .execute()
                         
                     # Extract a summary from the call logs
@@ -904,13 +1101,15 @@ async def get_call_history(user_id: str, limit: int = 20):
                     call['transcript'] = transcript
                 except Exception as e:
                     logger.error(f"Error getting call logs for call {call.get('call_sid')}: {e}")
-                    # Continue with empty summary and actions
+                    # Continue with empty summary, actions, and transcript
                     call['summary'] = ""
                     call['actions'] = []
+                    call['transcript'] = []
             else:
-                # For calls without call_sid (e.g., failed calls), set empty summary and actions
+                # For calls without call_sid (e.g., failed calls), set empty summary, actions, and transcript
                 call['summary'] = ""
                 call['actions'] = []
+                call['transcript'] = []
             
             # Calculate duration if available
             duration = None

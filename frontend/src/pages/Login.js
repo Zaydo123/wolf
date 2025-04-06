@@ -280,10 +280,7 @@ const Login = () => {
         Don't have an account? <Link to="/register">Register now</Link>
       </RegisterLink>
       
-      <div style={{ marginTop: '30px', textAlign: 'center', fontSize: '12px', color: '#999' }}>
-        For local development: Remember to run Supabase via `supabase start` for full functionality.<br/>
-        Or use test@example.com / password for testing without Supabase.
-      </div>
+
     </LoginContainer>
   );
 };
