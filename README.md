@@ -80,6 +80,5 @@ A modern trading platform with a retro twist. Wolf combines real-time market dat
 - `TWILIO_ACCOUNT_SID` - Twilio account identifier
 - `TWILIO_AUTH_TOKEN` - Twilio authentication token
 - `ALPHA_VANTAGE_API_KEY` - Alpha Vantage API key
-- `POLYGON_API_KEY` - Polygon.io API key
 - `GEMINI_API_KEY` - Google Gemini API key
 - `ELEVENLABS_API_KEY` - ElevenLabs API key
