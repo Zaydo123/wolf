@@ -1,162 +1,85 @@
-# Wolf - Retro AI Stockbroker Paper Trading Platform
+# Wolf Trading Platform
 
-A retro-styled paper trading platform inspired by "The Wolf of Wall Street" where users receive AI-powered phone calls simulating conversations with a human stockbroker. Users can trade stocks using natural voice commands over the phone, providing a unique and engaging paper trading experience.
+A modern trading platform with a retro twist. Wolf combines real-time market data with an innovative phone calling system, allowing users to receive market updates and trade notifications through actual voice calls. The platform features a unique retro-terminal interface while leveraging cutting-edge technologies for real-time trading capabilities.
 
 ## Key Features
 
-- **AI-Powered Voice Calls**: Receive automated calls from your AI stockbroker at market open, mid-day, or close
-- **Voice Trading**: Make trades using natural language over the phone (e.g., "Buy 5 shares of Apple")
-- **Retro UI**: Experience the nostalgic feel of 80s/90s trading with a retro-styled interface
-- **Real-time Updates**: Watch your portfolio update in real-time via WebSockets
-- **Paper Trading**: Practice trading without risking real money
+- **Voice Calling Integration**: Receive market updates and trade notifications through actual phone calls
+- **Real-Time Trading**: Paper trading with live market data
+- **Portfolio Management**: Track positions, profits, and trade history
+- **Live Market Data**: Real-time stock prices and market indicators
+- **AI Trading Assistant**: Powered by Google's Gemini for market analysis
+- **News Aggregation**: Live financial news from major sources
+- **Retro UI**: Nostalgic terminal-style interface with modern functionality
 
-## Tech Stack
+## Technology Stack
 
-- **Frontend**: React.js with WebSocket support
-- **Backend**: FastAPI with REST + WebSocket API
-- **Database**: Supabase (PostgreSQL)
-- **Voice System**: Twilio Programmable Voice
-- **AI/NLP**: Google Gemini for AI conversations and intent parsing
-- **Stock Data**: Yahoo Finance (yfinance library)
+### Frontend Technologies
+- **React.js** (v18.2.0) - Core frontend framework
+- **Styled Components** (v6.0.7) - Styling and UI components
+- **React Router DOM** (v6.15.0) - Navigation and routing
+- **Recharts** (v2.8.0) - Interactive charts
+- **Axios** (v1.5.0) - HTTP client
 
-## Project Structure
+### Backend Technologies
+- **FastAPI** (v0.103.1) - High-performance API framework
+- **Uvicorn** (v0.23.2) - ASGI server
+- **Pydantic** (v2.3.0) - Data validation
+- **WebSockets** (v11.0.3) - Real-time updates
+- **HTTPX** (v0.24.1) - Async HTTP client
+- **AsyncPG** (v0.30.0) - Async PostgreSQL
 
-```
-├── backend/                 # FastAPI backend
-│   ├── app/                 # Application code
-│   │   ├── api/             # API endpoints
-│   │   ├── core/            # Core configuration
-│   │   ├── db/              # Database connections
-│   │   ├── services/        # Business logic services
-│   │   └── schemas/         # Pydantic models
-│   ├── requirements.txt     # Python dependencies
-│   └── schema.sql           # Supabase schema
-├── frontend/                # React.js frontend
-│   ├── public/              # Static files
-│   ├── src/                 # Source code
-│   │   ├── components/      # React components
-│   │   ├── context/         # React context (auth, etc.)
-│   │   ├── hooks/           # Custom React hooks
-│   │   ├── pages/           # Page components
-│   │   ├── services/        # API services
-│   │   ├── styles/          # CSS styles
-│   │   └── utils/           # Utility functions
-│   └── package.json         # Node.js dependencies
-└── README.md                # Project documentation
-```
+### Database & Authentication
+- **Supabase** (v2.3.0 Python, v2.33.1 JS) - Database and auth
+- **PostgreSQL** - Primary database
+- **Python-Jose** (v3.3.0) - JWT handling
+
+### External Services Integration
+- **Twilio** (v8.5.0) - Phone calling system
+- **Google Generative AI** (v0.3.1) - AI assistant
+- **ElevenLabs** (v1.3.0) - Voice synthesis ( Unused but in code for future reference)
+- **Alpha Vantage** - Market data APIs
+
+### Data Processing & Utilities
+- **YFinance** (v0.2.36) - Yahoo Finance data
+- **Feedparser** (v6.0.10) - RSS feed processing
+- **Python-Multipart** (v0.0.6) - Form data handling
+- **Python-Dotenv** (v1.0.0) - Environment management
+- **Tenacity** (v8.2.3) - Retry handling
+- **AIOHTTP** (v3.9.5) - Async HTTP
 
 ## Getting Started
 
-### Prerequisites
-
-- Node.js (v14+)
-- Python (v3.9+)
-- Supabase account
-- Twilio account
-- Google API key (for Gemini)
-
-### Option 1: Running with Docker
-
-The easiest way to run the application is using Docker and Docker Compose:
-
-1. Clone the repository:
-   ```
-   git clone <repository-url>
-   cd wolf
-   ```
-
-2. Create a `.env` file in the root directory with your credentials:
-   ```
-   # Copy the example env file
-   cp backend/.env.example .env
-   
-   # Edit the .env file with your credentials
-   nano .env
-   ```
-
-3. Build and start the containers:
-   ```
-   docker-compose up -d
-   ```
-
-4. Access the application:
-   - Frontend: http://localhost:3000
-   - Backend API: http://localhost:8000
-   - API Documentation: http://localhost:8000/docs
-
-### Option 2: Manual Setup
-
-#### Backend Setup
-
-1. Navigate to the backend directory:
-   ```
-   cd backend
-   ```
-
-2. Create a virtual environment:
-   ```
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-
+1. Clone the repository
+2. Set up environment variables (see `.env.example`)
 3. Install dependencies:
-   ```
+   ```bash
+   # Backend
+   cd backend
    pip install -r requirements.txt
-   ```
 
-4. Copy the environment example and update with your credentials:
-   ```
-   cp .env.example .env
-   ```
-
-5. Run the backend:
-   ```
-   uvicorn app.main:app --reload
-   ```
-
-#### Frontend Setup
-
-1. Navigate to the frontend directory:
-   ```
+   # Frontend
    cd frontend
-   ```
-
-2. Install dependencies:
-   ```
    npm install
    ```
+4. Start the services:
+   ```bash
+   # Backend
+   cd backend
+   uvicorn app.main:app --reload
 
-3. Create a `.env` file with your environment variables:
-   ```
-   REACT_APP_API_URL=http://localhost:8000
-   REACT_APP_WS_URL=ws://localhost:8000/ws
-   REACT_APP_SUPABASE_URL=your_supabase_url
-   REACT_APP_SUPABASE_KEY=your_supabase_anon_key
-   ```
-
-4. Run the frontend:
-   ```
+   # Frontend
+   cd frontend
    npm start
    ```
 
-### Database Setup
+## Environment Variables Required
 
-1. Create a new Supabase project
-2. Run the SQL commands from `backend/schema.sql` in the Supabase SQL Editor
-
-## Call Experience
-
-1. User receives a call or initiates a call from the dashboard
-2. The AI broker provides a personalized market update based on the user's portfolio and market conditions
-3. User can speak naturally to make trades ("Buy 10 shares of Tesla")
-4. The AI processes the request and executes the paper trade
-5. Real-time updates appear on the dashboard showing the executed trade and updated portfolio
-
-## License
-
-This project is for demonstration purposes only and not intended for production use without further development and security considerations.
-
-## Acknowledgments
-
-- Inspired by "The Wolf of Wall Street"
-- Built as a hackathon project 
+- `SUPABASE_URL` - Supabase project URL
+- `SUPABASE_KEY` - Supabase project key
+- `TWILIO_ACCOUNT_SID` - Twilio account identifier
+- `TWILIO_AUTH_TOKEN` - Twilio authentication token
+- `ALPHA_VANTAGE_API_KEY` - Alpha Vantage API key
+- `POLYGON_API_KEY` - Polygon.io API key
+- `GEMINI_API_KEY` - Google Gemini API key
+- `ELEVENLABS_API_KEY` - ElevenLabs API key
