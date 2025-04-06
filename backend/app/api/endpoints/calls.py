@@ -26,6 +26,40 @@ twilio_service = TwilioService()
 gemini_service = GeminiService()
 trading_service = TradingService()
 
+def format_phone_number(phone_number):
+    """
+    Format a phone number to E.164 format as required by Twilio.
+    E.164 format: +[country code][phone number without leading 0]
+    e.g., +14155552671
+    
+    Args:
+        phone_number (str): The phone number to format
+        
+    Returns:
+        str: The E.164 formatted phone number
+    """
+    if not phone_number:
+        return None
+        
+    # Remove any non-digit characters
+    digits_only = ''.join(filter(str.isdigit, phone_number))
+    
+    # If the number already has the international format with +, return it
+    if phone_number.startswith('+'):
+        return phone_number
+        
+    # If US/Canada number (10 digits), add +1
+    if len(digits_only) == 10:
+        return f"+1{digits_only}"
+        
+    # If it includes country code (>10 digits), add +
+    if len(digits_only) > 10:
+        return f"+{digits_only}"
+        
+    # Otherwise, return as is with + prefix (may not work with Twilio)
+    logger.warning(f"Phone number {phone_number} may not be in a valid format for Twilio")
+    return f"+{digits_only}"
+
 @router.post("/schedule")
 async def schedule_call(
     user_id: str, 
@@ -77,20 +111,32 @@ async def initiate_call(user_id: str):
         
         phone_number = user_info.data[0]['phone_number']
         
+        # Format the phone number to E.164 format required by Twilio
+        formatted_phone = format_phone_number(phone_number)
+        if not formatted_phone:
+            raise HTTPException(status_code=400, detail="Invalid phone number")
+        
+        logger.info(f"Initiating call to user {user_id} with phone number {formatted_phone}")
+        
         # Initiate the call using Twilio
-        call_result = twilio_service.initiate_call(phone_number, user_id)
+        call_result = twilio_service.initiate_call(formatted_phone, user_id)
+        
+        # Check if call initiation failed
+        if call_result.get('status') == 'error':
+            logger.error(f"Twilio call initiation failed: {call_result.get('error')}")
+            raise HTTPException(status_code=500, detail=f"Twilio error: {call_result.get('error')}")
         
         # Record the call in the database
         supabase.table('calls').insert({
             'user_id': user_id,
             'call_sid': call_result.get('call_sid'),
             'status': call_result.get('status'),
-            'phone_number': phone_number
+            'phone_number': formatted_phone
         }).execute()
         
         return call_result
     except Exception as e:
-        logger.error(f"Error initiating call: {e}")
+        logger.error(f"Error initiating call: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/connect/{user_id}")
@@ -272,11 +318,18 @@ async def handle_inbound_call(request: Request):
         
         logger.info(f"Inbound call received from {caller_number}, SID: {call_sid}")
         
+        # Format the phone number for database lookup
+        formatted_phone = format_phone_number(caller_number)
+        
         # Get user by phone number
         supabase = get_supabase_client()
-        user_result = supabase.table('users').select('*').eq('phone_number', caller_number).execute()
+        user_result = supabase.table('users').select('*').eq('phone_number', formatted_phone).execute()
         
-        # If user not found, create a temporary user for demo purposes
+        # If user not found, try without formatting
+        if not user_result.data:
+            user_result = supabase.table('users').select('*').eq('phone_number', caller_number).execute()
+            
+        # If user still not found, create a temporary user for demo purposes
         if not user_result.data:
             logger.info(f"User not found for number {caller_number}. Creating temporary demo user.")
             
@@ -285,7 +338,7 @@ async def handle_inbound_call(request: Request):
                 'id': user_id,
                 'email': f"demo_{user_id[:8]}@example.com",
                 'name': 'Demo User',
-                'phone_number': caller_number,
+                'phone_number': formatted_phone,  # Store the formatted number
                 'cash_balance': 25000.0,
                 'created_at': datetime.datetime.now().isoformat(),
                 'updated_at': datetime.datetime.now().isoformat()
@@ -313,7 +366,7 @@ async def handle_inbound_call(request: Request):
             'user_id': user_id,
             'call_sid': call_sid,
             'status': 'in-progress',
-            'phone_number': caller_number,
+            'phone_number': formatted_phone,
             'direction': 'inbound'
         }).execute()
         

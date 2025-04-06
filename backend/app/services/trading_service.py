@@ -2,6 +2,7 @@ import logging
 import asyncio
 import datetime
 import httpx
+import os
 
 # Try both import approaches
 try:
@@ -29,29 +30,79 @@ class TradingService:
         """
         try:
             import yfinance as yf
+            import requests.exceptions
+            import json.decoder
             
             # This is a synchronous call, so we'll run it in a thread pool
             loop = asyncio.get_event_loop()
             
-            # Define the function to run in the thread pool
+            # Define the function to run in the thread pool with better error handling
             def fetch_price():
-                stock = yf.Ticker(ticker)
-                # Get the latest price data
-                data = stock.history(period="1d")
-                if not data.empty:
-                    # Return the most recent closing price
-                    return data['Close'].iloc[-1]
+                try:
+                    stock = yf.Ticker(ticker)
+                    
+                    # Method 1: Try fast_info.last_price (newest and fastest method)
+                    try:
+                        price = stock.fast_info.last_price
+                        if price and price > 0:
+                            logger.info(f"Got price for {ticker} using fast_info: ${price}")
+                            return price
+                    except (AttributeError, KeyError) as e:
+                        logger.debug(f"fast_info not available for {ticker}: {e}")
+                    
+                    # Method 2: Try info dictionary with fallbacks
+                    try:
+                        info = stock.info
+                        # Try multiple keys as they can change between API versions
+                        price = info.get('regularMarketPrice') or info.get('currentPrice') or info.get('price')
+                        if price and price > 0:
+                            logger.info(f"Got price for {ticker} using info dict: ${price}")
+                            return price
+                    except (AttributeError, KeyError, ValueError) as e:
+                        logger.debug(f"Info dict not available for {ticker}: {e}")
+                    
+                    # Method 3: Try 1-minute interval data for most recent price
+                    try:
+                        minute_data = stock.history(period="1d", interval="1m")
+                        if not minute_data.empty:
+                            price = minute_data['Close'].iloc[-1]
+                            if price and price > 0:
+                                logger.info(f"Got price for {ticker} using minute data: ${price}")
+                                return price
+                    except Exception as e:
+                        logger.debug(f"Minute data not available for {ticker}: {e}")
+                    
+                    # Method 4: Try daily data as last resort
+                    daily_data = stock.history(period="1d")
+                    if not daily_data.empty:
+                        price = daily_data['Close'].iloc[0]
+                        logger.info(f"Got price for {ticker} using daily data: ${price}")
+                        return price
+                        
+                    logger.warning(f"No price data available for {ticker} after trying all methods")
+                    return None
+                        
+                except (requests.exceptions.RequestException, json.decoder.JSONDecodeError, 
+                        ValueError, KeyError, IndexError) as e:
+                    logger.warning(f"Error fetching data for {ticker}: {str(e)}")
+                
                 return None
             
-            # Run the function in a thread pool
-            price = await loop.run_in_executor(None, fetch_price)
+            # Run the function in a thread pool with a timeout
+            try:
+                price_task = asyncio.create_task(loop.run_in_executor(None, fetch_price))
+                # Wait for task with a timeout
+                price = await asyncio.wait_for(price_task, timeout=10.0)
+            except asyncio.TimeoutError:
+                logger.error(f"Timeout fetching price for {ticker}")
+                return None
             
             if price:
-                logger.info(f"Got price for {ticker}: ${price}")
                 return price
             else:
-                logger.warning(f"Could not get price for {ticker}")
+                logger.error(f"Could not get price for {ticker}")
                 return None
+                
         except Exception as e:
             logger.error(f"Error getting stock price for {ticker}: {e}")
             return None
@@ -204,51 +255,174 @@ class TradingService:
         """
         try:
             import yfinance as yf
+            import requests.exceptions
+            import json.decoder
             
-            # Define function to get index data
+            # Define function to get index data with improved error handling
             async def get_index_data(symbol):
                 loop = asyncio.get_event_loop()
                 
                 def fetch_index():
-                    index = yf.Ticker(symbol)
-                    data = index.history(period="2d")
-                    if not data.empty:
-                        current = data['Close'].iloc[-1]
-                        previous = data['Close'].iloc[-2]
-                        change = current - previous
-                        change_percent = (change / previous) * 100
-                        return {
-                            'price': current,
-                            'change': change,
-                            'change_percent': change_percent
-                        }
+                    try:
+                        # Set a timeout for the request
+                        index = yf.Ticker(symbol)
+                        
+                        # Method 1: Try fast_info for current data
+                        try:
+                            fast_info = index.fast_info
+                            current = fast_info.last_price
+                            previous = fast_info.previous_close
+                            if current and previous and current > 0 and previous > 0:
+                                change = current - previous
+                                change_percent = (change / previous) * 100
+                                logger.info(f"Successfully fetched {symbol} data using fast_info")
+                                return {
+                                    'price': current,
+                                    'change': change,
+                                    'change_percent': change_percent
+                                }
+                        except (AttributeError, KeyError) as e:
+                            logger.debug(f"fast_info not available for {symbol}: {e}")
+                        
+                        # Method 2: Try info dictionary
+                        try:
+                            info = index.info
+                            current = info.get('regularMarketPrice') or info.get('currentPrice') or info.get('price')
+                            previous = info.get('regularMarketPreviousClose') or info.get('previousClose')
+                            if current and previous and current > 0 and previous > 0:
+                                change = current - previous
+                                change_percent = (change / previous) * 100
+                                logger.info(f"Successfully fetched {symbol} data using info dict")
+                                return {
+                                    'price': current,
+                                    'change': change,
+                                    'change_percent': change_percent
+                                }
+                        except (AttributeError, KeyError, ValueError) as e:
+                            logger.debug(f"Info dict not available for {symbol}: {e}")
+                            
+                        # Method 3: Try 1-minute data for most recent price
+                        try:
+                            minute_data = index.history(period="2d", interval="1m")
+                            if not minute_data.empty and len(minute_data) > 60:  # At least one hour of data
+                                current = minute_data['Close'].iloc[-1]
+                                # Use yesterday's close for previous
+                                yesterday_data = index.history(period="2d")
+                                if len(yesterday_data) >= 2:
+                                    previous = yesterday_data['Close'].iloc[-2]
+                                    change = current - previous
+                                    change_percent = (change / previous) * 100
+                                    logger.info(f"Successfully fetched {symbol} data using minute data")
+                                    return {
+                                        'price': current,
+                                        'change': change,
+                                        'change_percent': change_percent
+                                    }
+                        except Exception as e:
+                            logger.debug(f"Minute data not available for {symbol}: {e}")
+                            
+                        # Method 4: Fall back to original method with daily data
+                        data = index.history(period="2d")
+                        if not data.empty and len(data) >= 2:
+                            current = data['Close'].iloc[-1]
+                            previous = data['Close'].iloc[-2]
+                            change = current - previous
+                            change_percent = (change / previous) * 100
+                            logger.info(f"Successfully fetched {symbol} data using daily data")
+                            return {
+                                'price': current,
+                                'change': change,
+                                'change_percent': change_percent
+                            }
+                        elif not data.empty and len(data) == 1:
+                            # Only one day available, use small change
+                            current = data['Close'].iloc[-1]
+                            # Assume zero change
+                            change = 0
+                            change_percent = 0
+                            logger.warning(f"Only 1 day of data available for {symbol}")
+                            return {
+                                'price': current,
+                                'change': change,
+                                'change_percent': change_percent
+                            }
+                            
+                        logger.warning(f"No data available for {symbol} after trying all methods")
+                        return None
+                        
+                    except (requests.exceptions.RequestException, json.decoder.JSONDecodeError, 
+                            ValueError, KeyError, IndexError) as e:
+                        logger.error(f"Error fetching data for {symbol}: {str(e)}")
+                    
+                    # If any exception or empty data, return None
                     return None
                 
-                return await loop.run_in_executor(None, fetch_index)
+                try:
+                    return await loop.run_in_executor(None, fetch_index)
+                except Exception as e:
+                    logger.error(f"Thread pool error for {symbol}: {str(e)}")
+                    return None
             
-            # Get market indices
-            sp500 = await get_index_data("^GSPC")  # S&P 500
-            dow = await get_index_data("^DJI")     # Dow Jones
-            nasdaq = await get_index_data("^IXIC")  # NASDAQ
+            # Try to get market indices with a timeout
+            try:
+                # Use asyncio.wait_for to add timeout
+                sp500_task = asyncio.create_task(get_index_data("^GSPC"))  # S&P 500
+                dow_task = asyncio.create_task(get_index_data("^DJI"))     # Dow Jones
+                nasdaq_task = asyncio.create_task(get_index_data("^IXIC")) # NASDAQ
+                
+                # Wait for all tasks with a timeout
+                done, pending = await asyncio.wait(
+                    [sp500_task, dow_task, nasdaq_task], 
+                    timeout=15.0  # Increased timeout for production
+                )
+                
+                # Cancel any pending tasks
+                for task in pending:
+                    task.cancel()
+                
+                # Get results, handling timeouts
+                sp500 = sp500_task.result() if sp500_task in done and not sp500_task.exception() else None
+                dow = dow_task.result() if dow_task in done and not dow_task.exception() else None
+                nasdaq = nasdaq_task.result() if nasdaq_task in done and not nasdaq_task.exception() else None
+                
+                # Log success or failure for each index
+                logger.info(f"Market data fetch results - S&P 500: {'Success' if sp500 else 'Failed'}, "
+                          f"Dow: {'Success' if dow else 'Failed'}, "
+                          f"Nasdaq: {'Success' if nasdaq else 'Failed'}")
             
-            indices = {
-                'sp500': sp500 or {'price': 'Unknown', 'change_percent': 0},
-                'dow': dow or {'price': 'Unknown', 'change_percent': 0},
-                'nasdaq': nasdaq or {'price': 'Unknown', 'change_percent': 0},
-            }
+            except asyncio.TimeoutError:
+                logger.error("Timeout fetching market indices")
+                sp500, dow, nasdaq = None, None, None
+            except Exception as e:
+                logger.error(f"Error fetching market indices: {str(e)}")
+                sp500, dow, nasdaq = None, None, None
             
-            # Get top news (in a real app, you'd use the RSS feed parser or news API)
-            # For simplicity, we'll mock this
+            # Get market news
             news = [
                 {"headline": "Fed Announces Interest Rate Decision", "summary": "The Federal Reserve announced it will maintain current interest rates."},
                 {"headline": "Tech Stocks Rally on Earnings", "summary": "Major tech companies reported better-than-expected earnings, driving market gains."},
                 {"headline": "Oil Prices Drop Amid Supply Concerns", "summary": "Crude oil prices fell 2% as OPEC+ considers increasing production."}
             ]
             
+            # Helper function to safely format index data
+            def format_index(index_data):
+                if not index_data:
+                    return "Unknown (N/A)"
+                    
+                price = index_data.get('price')
+                change = index_data.get('change_percent')
+                
+                if isinstance(price, (int, float)) and isinstance(change, (int, float)):
+                    return f"{price:.2f} ({change:.2f}%)"
+                elif isinstance(change, (int, float)):
+                    return f"Unknown ({change:.2f}%)"
+                else:
+                    return "Unknown (N/A)"
+            
             return {
-                'sp500': f"{indices['sp500']['price']:.2f} ({indices['sp500']['change_percent']:.2f}%)",
-                'dow': f"{indices['dow']['price']:.2f} ({indices['dow']['change_percent']:.2f}%)",
-                'nasdaq': f"{indices['nasdaq']['price']:.2f} ({indices['nasdaq']['change_percent']:.2f}%)",
+                'sp500': format_index(sp500),
+                'dow': format_index(dow),
+                'nasdaq': format_index(nasdaq),
                 'top_news': "\n".join([f"{item['headline']}: {item['summary']}" for item in news])
             }
             
